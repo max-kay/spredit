@@ -31,6 +31,9 @@ Color COLORS[NUM_COLORS] = {0};
 typedef unsigned char Sprite[SPRITE_SIZE * SPRITE_SIZE / 2];
 
 void sprite_draw(Sprite *sprite, int pixel_width, int left, int top) {
+    if (sprite == NULL) {
+        return;
+    }
     for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE; i++) {
         int idx = i / 2;
         int color_idx;
@@ -46,7 +49,103 @@ void sprite_draw(Sprite *sprite, int pixel_width, int left, int top) {
     }
 }
 
-int load_sprites() { return 0; }
+const char *SPRITES_PATH = "res/sprites/";
+
+typedef struct {
+    char name[32];
+    Sprite *sprite;
+} Entry;
+
+typedef struct {
+    Entry *items;
+    int count;
+    int capacity;
+
+} SpriteList;
+
+int read_sprite(Sprite *sprite, FILE *file) {
+    int objs_read = fread((void *)sprite, sizeof(char),
+                          SPRITE_SIZE * SPRITE_SIZE / 2, file);
+    if (objs_read != SPRITE_SIZE * SPRITE_SIZE / 2) {
+        return 1;
+    }
+    return 0;
+}
+
+int load_sprites(SpriteList *list) {
+    Entry sprite_entry = (Entry){.name = "new sprite", .sprite = NULL};
+    nob_da_append(list, sprite_entry);
+
+    DIR *dir;
+    struct dirent *dir_entry;
+
+    dir = opendir(SPRITES_PATH);
+    if (dir != NULL) {
+        while ((dir_entry = readdir(dir))) {
+            sprite_entry = (Entry){0};
+            if (dir_entry->d_namlen > 32) {
+                TraceLog(LOG_TRACE, "Path was to long for: %s\n",
+                         dir_entry->d_name);
+                continue;
+            }
+            int dot_idx = -1;
+            for (int i = 0; i < 32 && i < dir_entry->d_namlen; i++) {
+                char c = dir_entry->d_name[i];
+                if (c == '.') {
+                    dot_idx = i;
+                    break;
+                }
+                sprite_entry.name[i] = c;
+            }
+            if (dot_idx == -1) {
+                continue;
+            }
+
+            if (strcmp(&dir_entry->d_name[dot_idx], ".bin") != 0) {
+                continue;
+            }
+
+            TraceLog(LOG_INFO, "loading: %s", dir_entry->d_name);
+
+            char full_path[512];
+            int len = snprintf(full_path, sizeof(full_path), "%s/%s",
+                               SPRITES_PATH, dir_entry->d_name);
+
+            if (len < 0) {
+                TraceLog(LOG_TRACE, "Path construction failed for: %s",
+                         dir_entry->d_name);
+                continue;
+            }
+
+            Sprite *ptr = malloc(sizeof(Sprite));
+            if (ptr == NULL) {
+                TraceLog(LOG_FATAL, "cound not allocate sprite");
+                return 1;
+            }
+            char *path = full_path;
+            FILE *file = fopen(path, "rb");
+            if (file == NULL) {
+                free((void *)ptr);
+                continue;
+            }
+            if (read_sprite(ptr, file) != 0) {
+                free((void *)ptr);
+                continue;
+            };
+            sprite_entry.sprite = ptr;
+            nob_da_append(list, sprite_entry);
+        }
+
+        (void)closedir(dir);
+    } else {
+        TraceLog(LOG_FATAL, "Couldn't open the directory");
+        return 1;
+    }
+
+    TraceLog(LOG_INFO, "Loaded %d sprites", list->count);
+
+    return 0;
+}
 
 const char *COLOR_PATH = "res/color.bin";
 
@@ -60,8 +159,8 @@ int load_colors() {
         return 0;
     }
 
-    int ret_code = fread((void *)&COLORS, sizeof(Color), NUM_COLORS, file);
-    if (ret_code != NUM_COLORS) {
+    int objs_read = fread((void *)&COLORS, sizeof(Color), NUM_COLORS, file);
+    if (objs_read != NUM_COLORS) {
         puts("color file had incorrect len");
         fclose(file);
         return 1;
@@ -85,9 +184,14 @@ int write_colors() {
 
 const int MARK_LINE_THICK = 5;
 
-bool rect_contains(Rectangle rect, Vector2 position) {
-    return rect.x < position.x && position.x < rect.x + rect.width &&
-           rect.y < position.y && position.y < rect.y + rect.height;
+bool clickable_region(Rectangle rect) {
+    if (CheckCollisionPointRec(GetMousePosition(), rect)) {
+        DrawRectangleLinesEx(rect, MARK_LINE_THICK, WHITE);
+        if (IsMouseButtonPressed(0)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool clickable_box(const char *text, Rectangle rect, Color color) {
@@ -95,13 +199,7 @@ bool clickable_box(const char *text, Rectangle rect, Color color) {
     float fontsize = rect.height * 0.8;
     DrawText(text, rect.x + rect.height * 0.2, rect.y + rect.height * 0.1,
              fontsize, TEXT_COLOR);
-    if (rect_contains(rect, GetMousePosition())) {
-        DrawRectangleLinesEx(rect, MARK_LINE_THICK, WHITE);
-        if (IsMouseButtonPressed(0)) {
-            return true;
-        }
-    }
-    return false;
+    return clickable_region(rect);
 }
 
 void rgba_slider(Color *color, int index, Rectangle rect) {
@@ -121,11 +219,15 @@ void rgba_slider(Color *color, int index, Rectangle rect) {
                  (Vector2){rect.x + t * rect.width + 0.4 * rect.height,
                            rect.y + 1.2 * rect.height},
                  BLACK);
-    if (rect_contains(rect, GetMousePosition()) && IsMouseButtonDown(0)) {
+    if (CheckCollisionPointRec(GetMousePosition(), rect) &&
+        IsMouseButtonDown(0)) {
         unsigned char new =
             (unsigned char)((GetMouseX() - rect.x) / rect.width * 255.0);
         if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
             new = 0xFF;
+        }
+        if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) {
+            new = 0x00;
         }
         org_as_int &= ~(0xFF << shift_const);
         org_as_int += (uint32_t)new << shift_const;
@@ -223,20 +325,25 @@ void edit_sprite(int idx) {
 }
 
 int main() {
+    SpriteList sprites = {0};
+    InitWindow(WIDTH, HEIGHT, "Sprite Edit");
+    SetWindowState(FLAG_WINDOW_RESIZABLE);
+
+    SetTargetFPS(60);
+
     if (load_colors() != 0) {
         return 1;
     }
 
-    if (load_sprites() != 0) {
+    if (load_sprites(&sprites) != 0) {
         return 1;
     }
 
-    InitWindow(WIDTH, HEIGHT, "Edit Colors");
-    SetWindowState(FLAG_WINDOW_RESIZABLE);
-
-    SetTargetFPS(60);
     bool should_quit = false;
     while (!should_quit) {
+        bool palette = false;
+        int sprite_to_edit = -1;
+
         BeginDrawing();
         ClearBackground(BACKGROUND);
 
@@ -245,7 +352,7 @@ int main() {
 
         int elem_height = 50;
         int elem_width = 300;
-        bool palette = clickable_box(
+        palette = clickable_box(
             "Edit Palette",
             (Rectangle){MARGINS, current_y, elem_width, elem_height},
             UI_ELEM_COLOR);
@@ -255,10 +362,32 @@ int main() {
             "quit", (Rectangle){MARGINS, current_y, elem_width, elem_height},
             UI_ELEM_COLOR);
 
+        int sprite_width = 150;
+
+        for (int i = 0; i < sprites.count; i++) {
+            int x = i % 4;
+            int y = i / 4;
+
+            float sprite_left = elem_width + 2 * MARGINS + x * sprite_width;
+            float sprite_top =
+                y * (GetScreenWidth() - (float)elem_width + MARGINS);
+            sprite_draw(sprites.items[i].sprite, sprite_width / 16, sprite_left,
+                        sprite_top);
+            if (clickable_region((Rectangle){.x = sprite_left,
+                                             .y = sprite_top,
+                                             .width = sprite_width,
+                                             .height = sprite_width})) {
+                sprite_to_edit = i;
+            }
+        }
+
         EndDrawing();
         if (palette) {
             should_quit = false;
             edit_colors();
+        }
+        if (sprite_to_edit != -1) {
+            edit_sprite(sprite_to_edit);
         }
     }
     CloseWindow();
