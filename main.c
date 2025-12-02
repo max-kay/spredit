@@ -38,9 +38,9 @@ void sprite_draw(Sprite *sprite, int pixel_width, int left, int top) {
         int idx = i / 2;
         int color_idx;
         if (i % 2 == 0) {
-            color_idx = *sprite[idx] >> 4 & 0x0F;
+            color_idx = ((unsigned char *)(sprite))[idx] >> 4 & 0x0F;
         } else {
-            color_idx = *sprite[idx] & 0x0F;
+            color_idx = ((unsigned char *)(sprite))[idx] & 0x0F;
         }
         int x = i % 16;
         int y = i / 16;
@@ -313,10 +313,6 @@ void edit_colors() {
 void edit_sprite(int idx) {
     bool should_close = true;
     while (!should_close) {
-        int pixel_scale = HEIGHT / 20;
-        int sprite_size = pixel_scale * 16;
-        int left = WIDTH / 2 - sprite_size / 2;
-        int top = HEIGHT / 2 - sprite_size / 2;
         BeginDrawing();
         ClearBackground(WHITE);
         EndDrawing();
@@ -362,7 +358,7 @@ int main() {
             "quit", (Rectangle){MARGINS, current_y, elem_width, elem_height},
             UI_ELEM_COLOR);
 
-        int sprite_width = 150;
+        float sprite_width = 150;
 
         for (int i = 0; i < sprites.count; i++) {
             int x = i % 4;
@@ -383,7 +379,6 @@ int main() {
 
         EndDrawing();
         if (palette) {
-            should_quit = false;
             edit_colors();
         }
         if (sprite_to_edit != -1) {
