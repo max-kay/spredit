@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 #include <raylib.h>
@@ -27,7 +28,11 @@
 const int WIDTH = 1200;
 const int HEIGHT = 900;
 
+const int POPUP_WIDTH = 300;
+const int POPUP_HEIGHT = 200;
+
 const Color BACKGROUND = COLOR(0x222222FF);
+const Color POPUP_BACKGROUND = COLOR(0x333333FF);
 const Color TEXT_COLOR = WHITE;
 
 const float MARGINS = 30;
@@ -39,7 +44,9 @@ const float SMALL_FONT = 20;
 
 const float LITTLE_MARGIN = 10;
 
-const int BUTTON_HEIGHT = MEDIUM_FONT * 1.2;
+const float TEXT_BOX_FACTOR = 1.2;
+
+const int BUTTON_HEIGHT = MEDIUM_FONT * TEXT_BOX_FACTOR;
 
 const Color BUTTON_COLOR = GRAY;
 
@@ -47,6 +54,7 @@ const int MARK_LINE_THICK = 5;
 
 const int MAX_PIXE_SCALE = 15;
 
+const int MAX_NAME_LEN = 200;
 enum { SPRITE_SIZE = 16 };
 
 // half a byte
@@ -190,6 +198,15 @@ Rectangle get_window_rect() {
     };
 }
 
+Rectangle get_popup_rect() {
+    return (Rectangle){
+        .x = (float)(GetScreenWidth() - POPUP_WIDTH) / 2,
+        .y = (float)(GetScreenHeight() - POPUP_HEIGHT) / 2,
+        .width = POPUP_WIDTH,
+        .height = POPUP_HEIGHT,
+    };
+}
+
 Rectangle setup_screen(const char *text) {
     DrawText(text, MARGINS, MARGINS, TITLE_BAR * 18 / 20, TEXT_COLOR);
     Rectangle screen = shrink(get_window_rect(), MARGINS);
@@ -268,12 +285,12 @@ float slider_region(Rectangle rect, float t) {
 }
 
 typedef struct {
-    char name[32];
+    char *name;
     unsigned char *sprite;
-} Entry;
+} Sprite;
 
 typedef struct {
-    Entry *items;
+    Sprite *items;
     int count;
     int capacity;
 } SpriteList;
@@ -316,7 +333,7 @@ int read_sprite(unsigned char *sprite, FILE *file) {
 }
 
 int load_sprites() {
-    Entry sprite_entry = (Entry){0};
+    Sprite sprite = (Sprite){0};
 
     DIR *dir;
     struct dirent *dir_entry;
@@ -324,21 +341,23 @@ int load_sprites() {
     dir = opendir(SPRITES_PATH);
     if (dir != NULL) {
         while ((dir_entry = readdir(dir))) {
-            sprite_entry = (Entry){0};
-            if (dir_entry->d_namlen > 32) {
+            sprite = (Sprite){0};
+            if (dir_entry->d_namlen > MAX_NAME_LEN) {
                 TraceLog(LOG_TRACE, "Path was to long for: %s\n",
                          dir_entry->d_name);
                 continue;
             }
             int dot_idx = -1;
-            for (int i = 0; i < 32 && i < dir_entry->d_namlen; i++) {
+            for (int i = 0; i < MAX_NAME_LEN && i < dir_entry->d_namlen; i++) {
                 char c = dir_entry->d_name[i];
                 if (c == '.') {
                     dot_idx = i;
                     break;
                 }
-                sprite_entry.name[i] = c;
             }
+            char *name = malloc(dot_idx);
+            strlcpy(name, dir_entry->d_name, dot_idx);
+            sprite.name = name;
             if (dot_idx == -1) {
                 continue;
             }
@@ -375,8 +394,8 @@ int load_sprites() {
                 free((void *)ptr);
                 continue;
             };
-            sprite_entry.sprite = ptr;
-            nob_da_append(&GLOB_SPRITES, sprite_entry);
+            sprite.sprite = ptr;
+            nob_da_append(&GLOB_SPRITES, sprite);
         }
 
         closedir(dir);
@@ -520,7 +539,7 @@ void edit_colors() {
 
 void edit_sprite(int idx) {
     bool should_exit = false;
-    Entry *entry = &GLOB_SPRITES.items[idx];
+    Sprite *entry = &GLOB_SPRITES.items[idx];
     int color = -1;
     while (!should_exit) {
         BeginDrawing();
@@ -620,6 +639,69 @@ int sprite_selector(Rectangle rect, int *page, int *num_pages) {
     return sprite_to_edit;
 }
 
+char *string_popup(const char *text, const char *initial_text, int max_len) {
+    bool done = false;
+    char *input = malloc(max_len);
+    strcpy(input, initial_text);
+    int letter_count = strlen(input);
+    while (!done) {
+        BeginDrawing();
+        Rectangle full = get_popup_rect();
+        DrawRectangleRec(full, POPUP_BACKGROUND);
+        Rectangle inner = shrink(full, MARGINS);
+        DrawText(text, inner.x, inner.y, SMALL_FONT, TEXT_COLOR);
+
+        RectTuple split = chop_bottom(inner, LITTLE_MARGIN * 2 + SMALL_FONT);
+        DrawRectangleRec(split.r2, WHITE);
+        Rectangle text_field = shrink(split.r2, LITTLE_MARGIN);
+        DrawText(input, text_field.x, text_field.y, SMALL_FONT, BLACK);
+
+        EndDrawing();
+        int key = GetCharPressed();
+
+        while (key > 0) {
+            if ((key >= 32) && (key <= 125) && (letter_count < max_len - 1)) {
+                input[letter_count] = (char)key;
+                letter_count++;
+                input[letter_count] = '\0';
+            }
+            key = GetCharPressed();
+        }
+
+        if (IsKeyPressed(KEY_BACKSPACE) && letter_count > 0) {
+            letter_count--;
+            input[letter_count] = '\0';
+        }
+        if (IsKeyPressed(KEY_ENTER)) {
+            done = true;
+        }
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            free(input);
+            input = NULL;
+            done = true;
+        }
+    }
+    return input;
+}
+
+void edit_new() {
+    unsigned char *ptr = malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
+    for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE / 2; i++) {
+        ptr[i] = 0;
+    }
+
+    if (ptr == NULL) {
+        TraceLog(LOG_FATAL, "could not allocate new sprite");
+        // TODO:
+    }
+    Sprite entry = {
+        .name = string_popup("Enter sprite name:", "", MAX_NAME_LEN),
+        .sprite = ptr,
+    };
+    nob_da_append(&GLOB_SPRITES, entry);
+    edit_sprite(GLOB_SPRITES.count - 1);
+}
+
 int main() {
     InitWindow(WIDTH, HEIGHT, "Spredit");
     SetWindowState(FLAG_WINDOW_RESIZABLE);
@@ -666,19 +748,7 @@ int main() {
             edit_colors();
             break;
         case 1:
-            unsigned char *ptr =
-                malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
-            for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE / 2; i++) {
-                ptr[i] = 0;
-            }
-
-            if (ptr == NULL) {
-                TraceLog(LOG_FATAL, "could not allocate new sprite");
-                return 1;
-            }
-            Entry entry = {.name = {0}, .sprite = ptr};
-            nob_da_append(&GLOB_SPRITES, entry);
-            edit_sprite(GLOB_SPRITES.count - 1);
+            edit_new();
             break;
         case 2:
             should_quit = true;
