@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdlib.h>
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 #include <raylib.h>
@@ -41,8 +42,6 @@ enum { SPRITE_SIZE = 16 };
 // half a byte
 enum { NUM_COLORS = 16 };
 
-typedef unsigned char Sprite[SPRITE_SIZE * SPRITE_SIZE / 2];
-
 typedef struct {
     Rectangle r1;
     Rectangle r2;
@@ -53,13 +52,13 @@ RectTuple vsplit(Rectangle rect, float left_fr, float right_fr) {
     float right = right_fr / (left_fr + right_fr);
     float tot_width = rect.width - MARGINS;
     return (RectTuple){
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y,
             .width = tot_width * left,
             .height = rect.height,
         },
-        (Rectangle){
+        {
             .x = rect.x + tot_width * left + MARGINS,
             .y = rect.y,
             .width = tot_width * right,
@@ -73,13 +72,13 @@ RectTuple hsplit(Rectangle rect, float top_fr, float bottom_fr) {
     float bottom = bottom_fr / (top_fr + bottom_fr);
     float tot_height = rect.height - MARGINS;
     return (RectTuple){
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y,
             .width = rect.width,
             .height = tot_height * top,
         },
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y + tot_height * top + MARGINS,
             .width = rect.width,
@@ -110,13 +109,13 @@ Rectangle hsubdivide(Rectangle rect, int count, int index) {
 
 RectTuple chop_top(Rectangle rect, float height) {
     return (RectTuple){
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y,
             .width = rect.width,
             .height = height,
         },
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y + height + MARGINS,
             .width = rect.width,
@@ -127,13 +126,13 @@ RectTuple chop_top(Rectangle rect, float height) {
 
 RectTuple chop_bottom(Rectangle rect, float height) {
     return (RectTuple){
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y,
             .width = rect.width,
             .height = rect.height - height - MARGINS,
         },
-        (Rectangle){
+        {
             .x = rect.x,
             .y = rect.y + rect.height - height,
             .width = rect.width,
@@ -143,10 +142,12 @@ RectTuple chop_bottom(Rectangle rect, float height) {
 }
 
 Rectangle shrink(Rectangle rect, float radius) {
-    return (Rectangle){.x = rect.x + radius,
-                       .y = rect.y + radius,
-                       .width = rect.width - 2 * radius,
-                       .height = rect.height - 2 * radius};
+    return (Rectangle){
+        .x = rect.x + radius,
+        .y = rect.y + radius,
+        .width = rect.width - 2 * radius,
+        .height = rect.height - 2 * radius,
+    };
 }
 
 Rectangle fit_square_factor(Rectangle rect, int factor) {
@@ -180,7 +181,7 @@ Rectangle get_window_rect() {
 }
 
 Rectangle setup_screen(const char *text) {
-    DrawText(text, MARGINS, MARGINS, TITLE_BAR * 18 / 20, WHITE);
+    DrawText(text, MARGINS, MARGINS, TITLE_BAR * 18 / 20, TEXT_COLOR);
     Rectangle screen = shrink(get_window_rect(), MARGINS);
     screen.y += TITLE_BAR + MARGINS;
     screen.height -= TITLE_BAR + MARGINS;
@@ -189,7 +190,7 @@ Rectangle setup_screen(const char *text) {
 
 bool clickable_region(Rectangle rect) {
     if (CheckCollisionPointRec(GetMousePosition(), rect)) {
-        DrawRectangleLinesEx(rect, MARK_LINE_THICK, WHITE);
+        DrawRectangleLinesEx(rect, MARK_LINE_THICK, TEXT_COLOR);
         if (IsMouseButtonPressed(0)) {
             return true;
         }
@@ -228,7 +229,7 @@ float slider_region(Rectangle rect, float t) {
 
 typedef struct {
     char name[32];
-    Sprite *sprite;
+    unsigned char *sprite;
 } Entry;
 
 typedef struct {
@@ -265,7 +266,7 @@ int load_colors() {
 
 const char *SPRITES_PATH = "res/sprites/";
 
-int read_sprite(Sprite *sprite, FILE *file) {
+int read_sprite(unsigned char *sprite, FILE *file) {
     int objs_read = fread((void *)sprite, sizeof(char),
                           SPRITE_SIZE * SPRITE_SIZE / 2, file);
     if (objs_read != SPRITE_SIZE * SPRITE_SIZE / 2) {
@@ -318,7 +319,8 @@ int load_sprites() {
                 continue;
             }
 
-            Sprite *ptr = malloc(sizeof(Sprite));
+            unsigned char *ptr =
+                malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
             if (ptr == NULL) {
                 TraceLog(LOG_FATAL, "cound not allocate sprite");
                 return 1;
@@ -337,7 +339,7 @@ int load_sprites() {
             nob_da_append(&GLOB_SPRITES, sprite_entry);
         }
 
-        (void)closedir(dir);
+        closedir(dir);
     } else {
         TraceLog(LOG_FATAL, "Couldn't open the directory %s", SPRITES_PATH);
         return 1;
@@ -348,7 +350,7 @@ int load_sprites() {
     return 0;
 }
 
-void sprite_draw(Sprite *sprite, int pixel_width, int left, int top) {
+void sprite_draw(unsigned char *sprite, int pixel_width, int left, int top) {
     if (sprite == NULL) {
         return;
     }
@@ -356,9 +358,9 @@ void sprite_draw(Sprite *sprite, int pixel_width, int left, int top) {
         int idx = i / 2;
         int color_idx;
         if (i % 2 == 0) {
-            color_idx = ((unsigned char *)(sprite))[idx] >> 4 & 0x0F;
+            color_idx = sprite[idx] & 0x0F;
         } else {
-            color_idx = ((unsigned char *)(sprite))[idx] & 0x0F;
+            color_idx = sprite[idx] >> 4 & 0x0F;
         }
         int x = i % 16;
         int y = i / 16;
@@ -393,9 +395,6 @@ void color_sliders(Color *color, Rectangle rect) {
     DrawText(
         TextFormat("#%02X%02X%02X%02X", color->r, color->g, color->b, color->a),
         rect.x, rect.y, TITLE_BAR * 15 / 20, WHITE);
-    const int num_siders = 4;
-    Rectangle slider_rect;
-    RectTuple slider_split;
 
     rgbaslider(vsubdivide(split.r2, 4, 0), &color->r, "R");
     rgbaslider(vsubdivide(split.r2, 4, 1), &color->g, "G");
@@ -411,11 +410,11 @@ int color_selector(Rectangle rect, int selected) {
     for (int i = 0; i < NUM_COLORS; i++) {
         int x = i % 4;
         int y = i / 4;
-        Rectangle colorpad = (Rectangle){
-            rect.x + x * rect.width / 4,
-            rect.y + y * rect.height / 4,
-            rect.width / 4,
-            rect.height / 4,
+        Rectangle colorpad = {
+            .x = rect.x + x * rect.width / 4,
+            .y = rect.y + y * rect.height / 4,
+            .width = rect.width / 4,
+            .height = rect.height / 4,
         };
         DrawRectangleRec(colorpad, COLORS[i]);
 
@@ -480,6 +479,16 @@ void edit_colors() {
     return;
 }
 
+bool pixel(Rectangle rect, Color color) {
+    if (CheckCollisionPointRec(GetMousePosition(), rect)) {
+        DrawRectangleRec(rect, color);
+        if (IsMouseButtonDown(0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void edit_sprite(int idx) {
     bool should_exit = false;
     Entry *entry = &GLOB_SPRITES.items[idx];
@@ -492,8 +501,30 @@ void edit_sprite(int idx) {
         RectTuple main_split = vsplit(main, 3, 2);
 
         Rectangle sprite_rect = fit_square_factor(main_split.r1, 16);
-        sprite_draw(entry->sprite, sprite_rect.width / 16, sprite_rect.x,
-                    sprite_rect.y);
+        int pixel_scale = sprite_rect.width / 16;
+        sprite_draw(entry->sprite, pixel_scale, sprite_rect.x, sprite_rect.y);
+        for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE; i++) {
+            int x = i % SPRITE_SIZE;
+            int y = i / SPRITE_SIZE;
+            Rectangle region = {
+                .x = sprite_rect.x + x * pixel_scale,
+                .y = sprite_rect.y + y * pixel_scale,
+                .width = pixel_scale,
+                .height = pixel_scale,
+            };
+            if (color != -1 && pixel(region, COLORS[color])) {
+                unsigned char double_pixel =
+                    ((unsigned char *)entry->sprite)[i / 2];
+                if (i % 2 == 0) {
+                    double_pixel &= 0xF0;
+                    double_pixel += (unsigned char)color;
+                } else {
+                    double_pixel &= 0x0F;
+                    double_pixel += (unsigned char)color << 4;
+                }
+                ((unsigned char *)entry->sprite)[i / 2] = double_pixel;
+            }
+        }
 
         RectTuple edit_split = chop_bottom(main_split.r2, UI_ELEM_HEIGHT);
 
@@ -591,7 +622,13 @@ int main() {
             edit_colors();
         }
         if (new) {
-            nob_da_append(&GLOB_SPRITES, (Entry){0});
+            char *ptr = malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
+            if (ptr == NULL) {
+                TraceLog(LOG_FATAL, "could not allocate new sprite");
+                return 1;
+            }
+            Entry entry = {.name = "", .sprite = ptr};
+            nob_da_append(&GLOB_SPRITES, entry);
             edit_sprite(GLOB_SPRITES.count - 1);
         }
         if (sprite_to_edit != -1) {
