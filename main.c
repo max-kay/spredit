@@ -3,10 +3,10 @@
 #include "nob.h"
 #include <raylib.h>
 
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
-#define DEBUG_RECT(rect) DrawRectangleLinesEx(rect, 5, RED);
+#define DEBUG_RECT(rect) DrawRectangleLinesEx(rect, 2, RED);
 #endif
 
 #ifndef DEBUG
@@ -31,6 +31,8 @@ const Color UI_ELEM_COLOR = GRAY;
 const int UI_ELEM_HEIGHT = 50;
 const float MARGINS = 30;
 const int TITLE_BAR = 60;
+
+const int MARK_LINE_THICK = 5;
 
 const int SLIDER_WIDTH = 256;
 
@@ -177,12 +179,51 @@ Rectangle get_window_rect() {
     };
 }
 
-Rectangle draw_title(const char *text) {
+Rectangle setup_screen(const char *text) {
     DrawText(text, MARGINS, MARGINS, TITLE_BAR * 18 / 20, WHITE);
     Rectangle screen = shrink(get_window_rect(), MARGINS);
     screen.y += TITLE_BAR + MARGINS;
     screen.height -= TITLE_BAR + MARGINS;
     return screen;
+}
+
+bool clickable_region(Rectangle rect) {
+    if (CheckCollisionPointRec(GetMousePosition(), rect)) {
+        DrawRectangleLinesEx(rect, MARK_LINE_THICK, WHITE);
+        if (IsMouseButtonPressed(0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool clickable_box(const char *text, Rectangle rect, Color color) {
+    DrawRectangleRec(rect, color);
+    float fontsize = rect.height * 0.8;
+    DrawText(text, rect.x + rect.height * 0.2, rect.y + rect.height * 0.1,
+             fontsize, TEXT_COLOR);
+    return clickable_region(rect);
+}
+
+float slider_region(Rectangle rect, float t) {
+    DrawTriangle((Vector2){rect.x + t * rect.width, rect.y + 0.8 * rect.height},
+                 (Vector2){rect.x + t * rect.width - 0.4 * rect.height,
+                           rect.y + 1.2 * rect.height},
+                 (Vector2){rect.x + t * rect.width + 0.4 * rect.height,
+                           rect.y + 1.2 * rect.height},
+                 BLACK);
+    if (CheckCollisionPointRec(GetMousePosition(), rect) &&
+        IsMouseButtonDown(0)) {
+        float new = (GetMouseX() - rect.x) / rect.width;
+        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+            new = 1.0;
+        }
+        if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) {
+            new = 0.0;
+        }
+        return new;
+    }
+    return -1;
 }
 
 typedef struct {
@@ -335,75 +376,71 @@ int write_colors() {
     fwrite(&COLORS, sizeof(Color), NUM_COLORS, file);
     fflush(file);
     fclose(file);
-
     return 0;
 }
 
-const int MARK_LINE_THICK = 5;
-
-bool clickable_region(Rectangle rect) {
-    if (CheckCollisionPointRec(GetMousePosition(), rect)) {
-        DrawRectangleLinesEx(rect, MARK_LINE_THICK, WHITE);
-        if (IsMouseButtonPressed(0)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool clickable_box(const char *text, Rectangle rect, Color color) {
-    DrawRectangleRec(rect, color);
-    float fontsize = rect.height * 0.8;
-    DrawText(text, rect.x + rect.height * 0.2, rect.y + rect.height * 0.1,
-             fontsize, TEXT_COLOR);
-    return clickable_region(rect);
-}
-
-void rgba_slider(Color *color, int index, Rectangle rect) {
-    const int shift_const = index * 8;
-    uint32_t org_as_int = *((uint32_t *)color);
-
-    uint32_t c0 = *(&org_as_int);
-    c0 &= ~((uint32_t)0xFF << shift_const);
-
-    uint32_t c1 = *(&org_as_int);
-    c1 |= (uint32_t)0xFF << shift_const;
-
-    DrawRectangleGradientEx(rect, *(Color *)&c0, *(Color *)&c0, *(Color *)&c1,
-                            *(Color *)&c1);
-    float t = (float)((org_as_int >> shift_const) & 0xFF) / 0xFF;
-
-    DrawTriangle((Vector2){rect.x + t * rect.width, rect.y + 0.8 * rect.height},
-                 (Vector2){rect.x + t * rect.width - 0.4 * rect.height,
-                           rect.y + 1.2 * rect.height},
-                 (Vector2){rect.x + t * rect.width + 0.4 * rect.height,
-                           rect.y + 1.2 * rect.height},
-                 BLACK);
-    if (CheckCollisionPointRec(GetMousePosition(), rect) &&
-        IsMouseButtonDown(0)) {
-        unsigned char new =
-            (unsigned char)((GetMouseX() - rect.x) / rect.width * 255.0);
-        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
-            new = 0xFF;
-        }
-        if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) {
-            new = 0x00;
-        }
-        org_as_int &= ~(0xFF << shift_const);
-        org_as_int += (uint32_t)new << shift_const;
-        *(uint32_t *)color = org_as_int;
+void rgbaslider(Rectangle rect, unsigned char *component, char *name) {
+    RectTuple split = vsplit(rect, 1, 4);
+    DrawText(name, split.r1.x, split.r1.y, 0.8 * split.r1.height, TEXT_COLOR);
+    float r = slider_region(split.r2, *component / 255.0);
+    if (r != -1) {
+        *component = 255.0 * r;
     }
 }
 
 void color_sliders(Color *color, Rectangle rect) {
     RectTuple split = chop_top(rect, TITLE_BAR);
-    DrawText(TextFormat("#%08X", *(uint32_t *)color), rect.x, rect.y,
-             TITLE_BAR * 15 / 20, WHITE);
-    for (int i = 0; i < 4; i++) {
-        rgba_slider(color, i, vsubdivide(split.r2, 4, i));
+    DrawText(
+        TextFormat("#%02X%02X%02X%02X", color->r, color->g, color->b, color->a),
+        rect.x, rect.y, TITLE_BAR * 15 / 20, WHITE);
+    const int num_siders = 4;
+    Rectangle slider_rect;
+    RectTuple slider_split;
+
+    rgbaslider(vsubdivide(split.r2, 4, 0), &color->r, "R");
+    rgbaslider(vsubdivide(split.r2, 4, 1), &color->g, "G");
+    rgbaslider(vsubdivide(split.r2, 4, 2), &color->b, "B");
+    rgbaslider(vsubdivide(split.r2, 4, 3), &color->a, "A");
+}
+
+int color_selector(Rectangle rect, int selected) {
+    rect = fit_square_factor(rect, 8);
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        selected = -1;
     }
-    DEBUG_RECT(split.r1);
-    DEBUG_RECT(split.r2);
+    for (int i = 0; i < NUM_COLORS; i++) {
+        int x = i % 4;
+        int y = i / 4;
+        Rectangle colorpad = (Rectangle){
+            rect.x + x * rect.width / 4,
+            rect.y + y * rect.height / 4,
+            rect.width / 4,
+            rect.height / 4,
+        };
+        DrawRectangleRec(colorpad, COLORS[i]);
+
+        Color opaque = COLORS[i];
+        opaque.a = 0xFF;
+        Rectangle opaque_r = (Rectangle){
+            rect.x + x * rect.width / 4,
+            rect.y + y * rect.height / 4,
+            rect.width / 8,
+            rect.height / 8,
+        };
+        DrawRectangleRec(opaque_r, opaque);
+
+        opaque_r.x += opaque_r.width;
+        opaque_r.y += opaque_r.height;
+        DrawRectangleRec(opaque_r, opaque);
+
+        if (clickable_region(colorpad)) {
+            selected = i;
+        }
+        if (selected == i) {
+            DrawRectangleLinesEx(colorpad, MARK_LINE_THICK, BLACK);
+        }
+    }
+    return selected;
 }
 
 void edit_colors() {
@@ -411,34 +448,14 @@ void edit_colors() {
     bool should_exit = false;
 
     while (!should_exit) {
-        if (IsKeyPressed(KEY_ESCAPE)) {
-            selected = -1;
-        }
 
         BeginDrawing();
         ClearBackground(BACKGROUND);
 
-        Rectangle main_region = draw_title("Editing Color Palette");
+        Rectangle main_region = setup_screen("Editing Color Palette");
         RectTuple main_split = vsplit(main_region, 3, 2);
-        Rectangle colors = fit_square_factor(main_split.r1, 4);
 
-        for (int i = 0; i < NUM_COLORS; i++) {
-            int x = i % 4;
-            int y = i / 4;
-            Rectangle rect = (Rectangle){
-                colors.x + x * colors.width / 4,
-                colors.y + y * colors.height / 4,
-                colors.width / 4,
-                colors.height / 4,
-            };
-            DrawRectangleRec(rect, COLORS[i]);
-            if (clickable_region(rect)) {
-                selected = i;
-            }
-            if (selected == i) {
-                DrawRectangleLinesEx(rect, MARK_LINE_THICK, BLACK);
-            }
-        }
+        selected = color_selector(main_split.r1, selected);
 
         RectTuple edit_split = chop_bottom(main_split.r2, UI_ELEM_HEIGHT);
 
@@ -464,10 +481,30 @@ void edit_colors() {
 }
 
 void edit_sprite(int idx) {
-    bool should_close = true;
-    while (!should_close) {
+    bool should_exit = false;
+    Entry *entry = &GLOB_SPRITES.items[idx];
+    int color = -1;
+    while (!should_exit) {
         BeginDrawing();
-        ClearBackground(WHITE);
+        ClearBackground(BACKGROUND);
+        Rectangle main =
+            setup_screen(TextFormat("Edit Sprite: %s", entry->name));
+        RectTuple main_split = vsplit(main, 3, 2);
+
+        Rectangle sprite_rect = fit_square_factor(main_split.r1, 16);
+        sprite_draw(entry->sprite, sprite_rect.width / 16, sprite_rect.x,
+                    sprite_rect.y);
+
+        RectTuple edit_split = chop_bottom(main_split.r2, UI_ELEM_HEIGHT);
+
+        color = color_selector(edit_split.r1, color);
+
+        RectTuple button_split = vsplit(edit_split.r2, 1, 1);
+        should_exit = clickable_box("exit", button_split.r1, UI_ELEM_COLOR);
+
+        if (clickable_box("save", button_split.r2, UI_ELEM_COLOR)) {
+            // TODO:
+        }
         EndDrawing();
     }
     return;
@@ -521,7 +558,7 @@ int main() {
         BeginDrawing();
         ClearBackground(BACKGROUND);
 
-        Rectangle main_region = draw_title("Spredit");
+        Rectangle main_region = setup_screen("Spredit");
 
         RectTuple main_split = vsplit(main_region, 2, 5);
 
@@ -535,14 +572,14 @@ int main() {
         current_y += UI_ELEM_HEIGHT + MARGINS;
 
         bool new =
-            clickable_box("new sprite",
+            clickable_box("New Sprite",
                           (Rectangle){main_split.r1.x, current_y,
                                       main_split.r1.width, UI_ELEM_HEIGHT},
                           UI_ELEM_COLOR);
         current_y += UI_ELEM_HEIGHT + MARGINS;
 
         should_quit =
-            clickable_box("quit",
+            clickable_box("Quit",
                           (Rectangle){main_split.r1.x, current_y,
                                       main_split.r1.width, UI_ELEM_HEIGHT},
                           UI_ELEM_COLOR);
