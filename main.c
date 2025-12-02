@@ -29,15 +29,23 @@ const int HEIGHT = 900;
 
 const Color BACKGROUND = COLOR(0x222222FF);
 const Color TEXT_COLOR = WHITE;
-const Color UI_ELEM_COLOR = GRAY;
 
-const int UI_ELEM_HEIGHT = 50;
 const float MARGINS = 30;
 const int TITLE_BAR = 60;
 
+const float LARGE_FONT = 50;
+const float MEDIUM_FONT = 30;
+const float SMALL_FONT = 20;
+
+const float LITTLE_MARGIN = 10;
+
+const int BUTTON_HEIGHT = MEDIUM_FONT * 1.2;
+
+const Color BUTTON_COLOR = GRAY;
+
 const int MARK_LINE_THICK = 5;
 
-const int SLIDER_WIDTH = 256;
+const int MAX_PIXE_SCALE = 15;
 
 enum { SPRITE_SIZE = 16 };
 
@@ -200,7 +208,7 @@ bool clickable_region(Rectangle rect) {
     return false;
 }
 
-bool clickable_box(const char *text, Rectangle rect, Color color) {
+bool button(const char *text, Rectangle rect, Color color) {
     DrawRectangleRec(rect, color);
     float fontsize = rect.height * 0.8;
     DrawText(text, rect.x + rect.height * 0.2, rect.y + rect.height * 0.1,
@@ -208,24 +216,34 @@ bool clickable_box(const char *text, Rectangle rect, Color color) {
     return clickable_region(rect);
 }
 
-int button_list(Rectangle rect, char *names[], int count) {
+int button_list(Rectangle *rect, char *names[], int count) {
     int selected = -1;
-    int current_y = rect.y;
 
     for (int i = 0; i < count; i++) {
         Rectangle r_button = {
-            .x = rect.x,
-            .y = current_y,
-            .width = rect.width,
-            .height = UI_ELEM_HEIGHT,
+            .x = rect->x,
+            .y = rect->y,
+            .width = rect->width,
+            .height = BUTTON_HEIGHT,
         };
-        if (clickable_box(names[i], r_button, UI_ELEM_COLOR)) {
+        if (button(names[i], r_button, BUTTON_COLOR)) {
             selected = i;
         };
-        current_y += UI_ELEM_HEIGHT + MARGINS;
+        rect->y += BUTTON_HEIGHT + MARGINS;
+        rect->height -= BUTTON_HEIGHT + MARGINS;
     }
 
     return selected;
+}
+
+bool pixel(Rectangle rect, Color color) {
+    if (CheckCollisionPointRec(GetMousePosition(), rect)) {
+        DrawRectangleRec(rect, color);
+        if (IsMouseButtonDown(0)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 float slider_region(Rectangle rect, float t) {
@@ -424,10 +442,10 @@ void color_sliders(Color *color, Rectangle rect) {
     rgbaslider(vsubdivide(split.r2, 4, 3), &color->a, "A");
 }
 
-int color_selector(Rectangle rect, int selected) {
+void color_selector(Rectangle rect, int *selected) {
     rect = fit_square_factor(rect, 8);
     if (IsKeyPressed(KEY_ESCAPE)) {
-        selected = -1;
+        *selected = -1;
     }
     for (int i = 0; i < NUM_COLORS; i++) {
         int x = i % 4;
@@ -455,13 +473,12 @@ int color_selector(Rectangle rect, int selected) {
         DrawRectangleRec(opaque_r, opaque);
 
         if (clickable_region(colorpad)) {
-            selected = i;
+            *selected = i;
         }
-        if (selected == i) {
+        if (*selected == i) {
             DrawRectangleLinesEx(colorpad, MARK_LINE_THICK, BLACK);
         }
     }
-    return selected;
 }
 
 void edit_colors() {
@@ -476,9 +493,9 @@ void edit_colors() {
         Rectangle main_region = setup_screen("Editing Color Palette");
         RectTuple main_split = vsplit(main_region, 3, 2);
 
-        selected = color_selector(main_split.r1, selected);
+        color_selector(main_split.r1, &selected);
 
-        RectTuple edit_split = chop_bottom(main_split.r2, UI_ELEM_HEIGHT);
+        RectTuple edit_split = chop_bottom(main_split.r2, BUTTON_HEIGHT);
 
         if (selected >= 0) {
             color_sliders(&COLORS[selected], edit_split.r1);
@@ -486,9 +503,9 @@ void edit_colors() {
 
         RectTuple button_split = vsplit(edit_split.r2, 1, 1);
 
-        should_exit = clickable_box("exit", button_split.r1, UI_ELEM_COLOR);
+        should_exit = button("exit", button_split.r1, BUTTON_COLOR);
 
-        if (clickable_box("save", button_split.r2, UI_ELEM_COLOR)) {
+        if (button("save", button_split.r2, BUTTON_COLOR)) {
             write_colors();
         }
         EndDrawing();
@@ -499,16 +516,6 @@ void edit_colors() {
     // load colors to make sure they are what is uptodate
     load_colors();
     return;
-}
-
-bool pixel(Rectangle rect, Color color) {
-    if (CheckCollisionPointRec(GetMousePosition(), rect)) {
-        DrawRectangleRec(rect, color);
-        if (IsMouseButtonDown(0)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 void edit_sprite(int idx) {
@@ -548,14 +555,14 @@ void edit_sprite(int idx) {
             }
         }
 
-        RectTuple edit_split = chop_bottom(main_split.r2, UI_ELEM_HEIGHT);
+        RectTuple edit_split = chop_bottom(main_split.r2, BUTTON_HEIGHT);
 
-        color = color_selector(edit_split.r1, color);
+        color_selector(edit_split.r1, &color);
 
         RectTuple button_split = vsplit(edit_split.r2, 1, 1);
-        should_exit = clickable_box("exit", button_split.r1, UI_ELEM_COLOR);
+        should_exit = button("exit", button_split.r1, BUTTON_COLOR);
 
-        if (clickable_box("save", button_split.r2, UI_ELEM_COLOR)) {
+        if (button("save", button_split.r2, BUTTON_COLOR)) {
             // TODO:
         }
         EndDrawing();
@@ -563,25 +570,50 @@ void edit_sprite(int idx) {
     return;
 }
 
-int sprite_selector(Rectangle rect) {
-    int pixel_scale = (float)(rect.width * 0.8 / 4 / 16);
-    int tot_width = pixel_scale * 4 * 16;
-    int h_margin = (rect.width - tot_width) / 3;
+bool sprite(Rectangle rect, int sprite) {
+    Rectangle sprite_region = {
+        .x = rect.x + LITTLE_MARGIN / 2,
+        .y = rect.y + LITTLE_MARGIN / 2,
+        .width = rect.width - LITTLE_MARGIN,
+        .height = rect.width - LITTLE_MARGIN,
+    };
+    sprite_region = fit_square_factor(sprite_region, 16);
+    sprite_draw(GLOB_SPRITES.items[sprite].sprite, sprite_region.width / 16,
+                sprite_region.x, sprite_region.y);
 
+    DrawText(GLOB_SPRITES.items[sprite].name, rect.x + LITTLE_MARGIN * 3 / 2,
+             rect.y + rect.width - LITTLE_MARGIN / 2, SMALL_FONT, TEXT_COLOR);
+    return clickable_region(rect);
+}
+
+int sprite_selector(Rectangle rect, int *page, int *num_pages) {
     int sprite_to_edit = -1;
+    int row_len = ceil(rect.width / (16 * MAX_PIXE_SCALE + LITTLE_MARGIN));
+    float width = rect.width / row_len;
+    float height = width + LITTLE_MARGIN + SMALL_FONT;
+    int row_count = floor(rect.height / height);
+    height = rect.height / row_count;
 
-    for (int i = 0; i < GLOB_SPRITES.count; i++) {
-        int x = i % 4;
-        int y = i / 4;
+    *num_pages = ceil((float)GLOB_SPRITES.count / (row_count * row_len));
 
-        float sprite_left = rect.x + (pixel_scale * 16 + h_margin) * x;
-        float sprite_top = rect.y + (pixel_scale * 16 + h_margin) * y;
-        sprite_draw(GLOB_SPRITES.items[i].sprite, pixel_scale, sprite_left,
-                    sprite_top);
-        if (clickable_region((Rectangle){.x = sprite_left,
-                                         .y = sprite_top,
-                                         .width = pixel_scale * 16,
-                                         .height = pixel_scale * 16})) {
+    if (page > num_pages) {
+        *page = 0;
+    }
+
+    int offset = *page * row_len * row_count;
+
+    for (int i = offset; i < GLOB_SPRITES.count && i < row_count * row_len;
+         i++) {
+        int x = (i - offset) % row_len;
+        int y = (i - offset) / row_len;
+
+        Rectangle region = {
+            .x = rect.x + x * width,
+            .y = rect.y + y * height,
+            .width = width,
+            .height = height,
+        };
+        if (sprite(region, i)) {
             sprite_to_edit = i;
         }
     }
@@ -601,9 +633,9 @@ int main() {
     }
 
     bool should_quit = false;
+    int page = 0;
+    int num_pages = 0;
     while (!should_quit) {
-        int sprite_to_edit = -1;
-
         BeginDrawing();
         ClearBackground(BACKGROUND);
 
@@ -617,9 +649,15 @@ int main() {
             "Quit",
         };
 
-        int result = button_list(main_split.r1, buttons, 3);
+        int result = button_list(&main_split.r1, buttons, 3);
 
-        sprite_to_edit = sprite_selector(main_split.r2);
+        DrawText(TextFormat("%d Sprites\nPage %d/%d", GLOB_SPRITES.count,
+                            page + 1, num_pages),
+                 main_split.r1.x,
+                 main_split.r1.y + main_split.r1.height - 2 * MEDIUM_FONT,
+                 MEDIUM_FONT, TEXT_COLOR);
+
+        int sprite_to_edit = sprite_selector(main_split.r2, &page, &num_pages);
 
         EndDrawing();
 
@@ -638,12 +676,13 @@ int main() {
                 TraceLog(LOG_FATAL, "could not allocate new sprite");
                 return 1;
             }
-            Entry entry = {.name = "", .sprite = ptr};
+            Entry entry = {.name = {0}, .sprite = ptr};
             nob_da_append(&GLOB_SPRITES, entry);
             edit_sprite(GLOB_SPRITES.count - 1);
             break;
         case 2:
             should_quit = true;
+            break;
         }
 
         if (sprite_to_edit != -1) {
