@@ -1,3 +1,6 @@
 CompileFlags:
   Add:
     - -I/opt/homebrew/include
+    - -Wall
+    - -std=c23
+    - -Wextra
