@@ -7,12 +7,10 @@ int main(int argc, char **argv) {
 
     Cmd cmd = {0};
     cmd_append(&cmd, "clang");
-    cmd_append(&cmd, "-Wall", "-Wextra", "-o", "main", "main.c");
+    cmd_append(&cmd, "-Wall", "-Wextra", "-std=c23", "-o", "main", "main.c");
 
-    // Include and Lib paths for Homebrew (Apple Silicon default)
     cmd_append(&cmd, "-I/opt/homebrew/include", "-L/opt/homebrew/lib");
 
-    // Link Raylib and required macOS frameworks
     cmd_append(&cmd, "-lraylib", "-framework", "CoreVideo", "-framework",
                "IOKit", "-framework", "Cocoa", "-framework", "GLUT",
                "-framework", "OpenGL");

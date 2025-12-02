@@ -1,5 +1,5 @@
 #include <math.h>
-#include <stdlib.h>
+#include <stdio.h>
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 #include <raylib.h>
@@ -16,10 +16,12 @@
 
 // clang-format off
 #define COLOR(x)\
-    (Color){(x >> 8 * 3) & 0xFF,\
-    (x >> 8 * 2) & 0xFF,\
-    (x >> 8 * 1) & 0xFF,\
-    (x >> 8 * 0) & 0xFF}
+    (Color){\
+        (x >> 8 * 3) & 0xFF,\
+        (x >> 8 * 2) & 0xFF,\
+        (x >> 8 * 1) & 0xFF,\
+        (x >> 8 * 0) & 0xFF,\
+    }
 // clang-format on
 
 const int WIDTH = 1200;
@@ -204,6 +206,26 @@ bool clickable_box(const char *text, Rectangle rect, Color color) {
     DrawText(text, rect.x + rect.height * 0.2, rect.y + rect.height * 0.1,
              fontsize, TEXT_COLOR);
     return clickable_region(rect);
+}
+
+int button_list(Rectangle rect, char *names[], int count) {
+    int selected = -1;
+    int current_y = rect.y;
+
+    for (int i = 0; i < count; i++) {
+        Rectangle r_button = {
+            .x = rect.x,
+            .y = current_y,
+            .width = rect.width,
+            .height = UI_ELEM_HEIGHT,
+        };
+        if (clickable_box(names[i], r_button, UI_ELEM_COLOR)) {
+            selected = i;
+        };
+        current_y += UI_ELEM_HEIGHT + MARGINS;
+    }
+
+    return selected;
 }
 
 float slider_region(Rectangle rect, float t) {
@@ -545,7 +567,6 @@ int sprite_selector(Rectangle rect) {
     int pixel_scale = (float)(rect.width * 0.8 / 4 / 16);
     int tot_width = pixel_scale * 4 * 16;
     int h_margin = (rect.width - tot_width) / 3;
-    int v_margin = 20;
 
     int sprite_to_edit = -1;
 
@@ -571,8 +592,6 @@ int main() {
     InitWindow(WIDTH, HEIGHT, "Spredit");
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 
-    SetTargetFPS(60);
-
     if (load_colors() != 0) {
         return 1;
     }
@@ -583,7 +602,6 @@ int main() {
 
     bool should_quit = false;
     while (!should_quit) {
-        bool palette = false;
         int sprite_to_edit = -1;
 
         BeginDrawing();
@@ -593,36 +611,29 @@ int main() {
 
         RectTuple main_split = vsplit(main_region, 2, 5);
 
-        int current_y = TITLE_BAR + 2 * MARGINS;
+        char *buttons[] = {
+            "Edit Palette",
+            "New Sprite",
+            "Quit",
+        };
 
-        palette =
-            clickable_box("Edit Palette",
-                          (Rectangle){main_split.r1.x, current_y,
-                                      main_split.r1.width, UI_ELEM_HEIGHT},
-                          UI_ELEM_COLOR);
-        current_y += UI_ELEM_HEIGHT + MARGINS;
-
-        bool new =
-            clickable_box("New Sprite",
-                          (Rectangle){main_split.r1.x, current_y,
-                                      main_split.r1.width, UI_ELEM_HEIGHT},
-                          UI_ELEM_COLOR);
-        current_y += UI_ELEM_HEIGHT + MARGINS;
-
-        should_quit =
-            clickable_box("Quit",
-                          (Rectangle){main_split.r1.x, current_y,
-                                      main_split.r1.width, UI_ELEM_HEIGHT},
-                          UI_ELEM_COLOR);
+        int result = button_list(main_split.r1, buttons, 3);
 
         sprite_to_edit = sprite_selector(main_split.r2);
 
         EndDrawing();
-        if (palette) {
+
+        switch (result) {
+        case 0:
             edit_colors();
-        }
-        if (new) {
-            char *ptr = malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
+            break;
+        case 1:
+            unsigned char *ptr =
+                malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
+            for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE / 2; i++) {
+                ptr[i] = 0;
+            }
+
             if (ptr == NULL) {
                 TraceLog(LOG_FATAL, "could not allocate new sprite");
                 return 1;
@@ -630,7 +641,11 @@ int main() {
             Entry entry = {.name = "", .sprite = ptr};
             nob_da_append(&GLOB_SPRITES, entry);
             edit_sprite(GLOB_SPRITES.count - 1);
+            break;
+        case 2:
+            should_quit = true;
         }
+
         if (sprite_to_edit != -1) {
             edit_sprite(sprite_to_edit);
         }
