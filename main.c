@@ -361,7 +361,7 @@ char *string_popup(const char *text, const char *initial_text, int max_len) {
 
 typedef struct {
     char *name;
-    unsigned char *sprite;
+    unsigned char *pixels;
 } Sprite;
 
 typedef struct {
@@ -385,7 +385,7 @@ SpriteList GLOB_SPRITES = {0};
 unsigned char EDIT_BUF[SPRITE_SIZE * SPRITE_SIZE / 2] = {0};
 
 int load_file(const char *path) {
-    FILE *file = fopen(path, "r");
+    FILE *file = fopen(path, "rb");
     int result = 0;
     if (!file) {
         result = -1;
@@ -441,7 +441,7 @@ int load_file(const char *path) {
             TraceLog(LOG_ERROR, "Error reading: %s", path);
             goto cleanup;
         }
-        Sprite sprite = {.name = name, .sprite = pixels};
+        Sprite sprite = {.name = name, .pixels = pixels};
         da_append(&GLOB_SPRITES, sprite);
     }
 
@@ -460,8 +460,17 @@ cleanup:
     return result;
 }
 
+void unload_sprites() {
+    da_foreach(Sprite, s, &GLOB_SPRITES) {
+        free(s->pixels);
+        free(s->pixels);
+    }
+    da_free(GLOB_SPRITES);
+    GLOB_SPRITES = (SpriteList){0};
+}
+
 int write_file(const char *path) {
-    FILE *file = fopen(path, "w");
+    FILE *file = fopen(path, "wb");
     int result = 0;
     if (!file) {
         TraceLog(LOG_ERROR, "Error creating file %s", path);
@@ -506,7 +515,7 @@ int write_file(const char *path) {
             }
         }
         size_t bytes_sent =
-            fwrite(sprite.sprite, 1, SPRITE_SIZE * SPRITE_SIZE / 2, file);
+            fwrite(sprite.pixels, 1, SPRITE_SIZE * SPRITE_SIZE / 2, file);
         if (bytes_sent != SPRITE_SIZE * SPRITE_SIZE / 2) {
             TraceLog(LOG_ERROR, "Error writing file: %s");
             result = -1;
@@ -638,7 +647,7 @@ void edit_colors() {
 }
 
 void edit_sprite(int idx) {
-    memcpy(&EDIT_BUF, GLOB_SPRITES.items[idx].sprite,
+    memcpy(&EDIT_BUF, GLOB_SPRITES.items[idx].pixels,
            SPRITE_SIZE * SPRITE_SIZE / 2);
     bool was_changed = false;
     char *name = GLOB_SPRITES.items[idx].name;
@@ -684,7 +693,7 @@ start:
         RectTuple buttons = vsplit(edit_split.r2, 1, 1);
 
         if (button("save", buttons.r1, BUTTON_COLOR)) {
-            memcpy(GLOB_SPRITES.items[idx].sprite, &EDIT_BUF,
+            memcpy(GLOB_SPRITES.items[idx].pixels, &EDIT_BUF,
                    SPRITE_SIZE * SPRITE_SIZE / 2);
             was_changed = false;
         }
@@ -704,7 +713,7 @@ start:
         case -1:
             goto start;
         case 1:
-            memcpy(GLOB_SPRITES.items[idx].sprite, &EDIT_BUF,
+            memcpy(GLOB_SPRITES.items[idx].pixels, &EDIT_BUF,
                    SPRITE_SIZE * SPRITE_SIZE / 2);
 
         case 0:
@@ -729,7 +738,7 @@ void edit_new() {
     }
     Sprite entry = {
         .name = name,
-        .sprite = ptr,
+        .pixels = ptr,
     };
     da_append(&GLOB_SPRITES, entry);
     edit_sprite(GLOB_SPRITES.count - 1);
@@ -743,7 +752,7 @@ bool sprite(Rectangle rect, int sprite) {
         .height = rect.width - LITTLE_MARGIN,
     };
     sprite_region = fit_square_factor(sprite_region, 16);
-    draw_sprite(GLOB_SPRITES.items[sprite].sprite, sprite_region.width / 16,
+    draw_sprite(GLOB_SPRITES.items[sprite].pixels, sprite_region.width / 16,
                 sprite_region.x, sprite_region.y);
 
     DrawText(GLOB_SPRITES.items[sprite].name, rect.x + LITTLE_MARGIN * 3 / 2,
@@ -877,4 +886,5 @@ int main(int argc, char *argv[]) {
         }
     }
     CloseWindow();
+    unload_sprites();
 }
