@@ -1,9 +1,9 @@
 #include <math.h>
-#include <stdlib.h>
 #define NOB_IMPLEMENTATION
 #define NOB_STRIP_PREFIX
 #include "nob.h"
 #include <raylib.h>
+#include <raymath.h>
 
 #define DEBUG
 
@@ -53,6 +53,38 @@ const Color BUTTON_COLOR = GRAY;
 const int MARK_LINE_THICK = 5;
 
 const int MAX_PIXEL_SCALE = 15;
+
+void draw_dashed_line(Vector2 start_pos, Vector2 end_pos, float thick,
+                      int segments) {
+    Vector2 dir = Vector2Subtract(end_pos, start_pos);
+    for (int i = 0; i < segments; i++) {
+        Color color;
+        if (i % 2) {
+            color = BLACK;
+        } else {
+            color = WHITE;
+        }
+        DrawLineEx(
+            Vector2Add(start_pos, Vector2Scale(dir, (float)i / segments)),
+            Vector2Add(start_pos, Vector2Scale(dir, (float)(i + 1) / segments)),
+            thick, color);
+    }
+}
+
+void draw_dashed_outline(Rectangle rect, float thick, int segments) {
+    draw_dashed_line((Vector2){rect.x, rect.y + thick / 2},
+                     (Vector2){rect.x + rect.width, rect.y + thick / 2}, thick,
+                     segments);
+    draw_dashed_line(
+        (Vector2){rect.x + rect.width - thick / 2, rect.y},
+        (Vector2){rect.x + rect.width - thick / 2, rect.y + rect.height}, thick,
+        segments);
+    draw_dashed_line(
+        (Vector2){rect.x + rect.width, rect.y + rect.height - thick / 2},
+        (Vector2){rect.x, rect.y + rect.height - thick / 2}, thick, segments);
+    draw_dashed_line((Vector2){rect.x + thick / 2, rect.y + rect.height},
+                     (Vector2){rect.x + thick / 2, rect.y}, thick, segments);
+}
 
 typedef struct {
     Rectangle r1;
@@ -227,6 +259,7 @@ bool button(const char *text, Rectangle rect, Color color) {
     return clickable_region(rect);
 }
 
+// TODO: enhance with macro
 int button_list(Rectangle *rect, char *names[], int count) {
     int selected = -1;
 
@@ -250,6 +283,7 @@ int button_list(Rectangle *rect, char *names[], int count) {
 bool pixel(Rectangle rect, Color color) {
     if (CheckCollisionPointRec(GetMousePosition(), rect)) {
         DrawRectangleRec(rect, color);
+        draw_dashed_outline(rect, (float)MARK_LINE_THICK / 5 * 3, 7);
         if (IsMouseButtonDown(0)) {
             return true;
         }
@@ -373,14 +407,14 @@ typedef struct {
 const int MAX_NAME_LEN = 64;
 enum { SPRITE_SIZE = 16 };
 
-// half a byte
 enum { NUM_COLORS = 16 };
 
 Color COLORS[NUM_COLORS] = {0};
 Color NEW_COLORS[NUM_COLORS] = {0};
 Color *DISPLAYCOLORS = &COLORS[0];
 
-SpriteList GLOB_SPRITES = {0};
+SpriteList SPRITES = {0};
+bool NAMED = true;
 
 unsigned char EDIT_BUF[SPRITE_SIZE * SPRITE_SIZE / 2] = {0};
 
@@ -398,11 +432,26 @@ int load_file(const char *path) {
         TraceLog(LOG_ERROR, "Error reading: %s", path);
         goto cleanup;
     }
-    if (strcmp(magic, "sprt") != 0) {
+    bool magic_ok = false;
+    bool has_names;
+    if (strcmp(magic, "sprt") == 0) {
+        TraceLog(LOG_INFO, "reading %s as named sprite");
+        has_names = true;
+        magic_ok = true;
+    }
+    if (strcmp(magic, "spru") == 0) {
+        TraceLog(LOG_INFO, "reading %s as named sprite");
+        has_names = false;
+        magic_ok = true;
+    }
+    if (!magic_ok) {
         result = -1;
         TraceLog(LOG_ERROR, "%s is not a sprite file", path);
         goto cleanup;
     }
+
+    NAMED = has_names;
+
     uint32_t r_count = 0;
     if (fread(&r_count, sizeof(uint32_t), 1, file) != 1) {
         result = -1;
@@ -415,22 +464,30 @@ int load_file(const char *path) {
         TraceLog(LOG_ERROR, "Error reading: %s", path);
         goto cleanup;
     }
-    da_reserve(&GLOB_SPRITES, count);
+
+    da_reserve(&SPRITES, count);
     for (int i = 0; i < count; i++) {
         char *name = malloc(MAX_NAME_LEN);
-        if (fread(name, 1, MAX_NAME_LEN, file) != MAX_NAME_LEN) {
-            free(name);
-            result = -1;
-            TraceLog(LOG_ERROR, "Error reading: %s", path);
-            goto cleanup;
+        if (has_names) {
+            if (fread(name, 1, MAX_NAME_LEN, file) != MAX_NAME_LEN) {
+                free(name);
+                result = -1;
+                TraceLog(LOG_ERROR, "Error reading: %s", path);
+                goto cleanup;
+            }
+            name[MAX_NAME_LEN - 1] = '\0';
+        } else {
+            snprintf(name, MAX_NAME_LEN, "%d", i);
         }
-        if (realloc(name, strlen(name) + 1) == NULL) {
+        char *temp = realloc(name, strlen(name) + 1);
+        if (temp == NULL) {
             free(name);
             result = -1;
             TraceLog(LOG_ERROR,
                      "Error reading: %s\ncould not shrink string buffer", path);
             goto cleanup;
         }
+        name = temp;
 
         unsigned char *pixels = malloc(SPRITE_SIZE * SPRITE_SIZE / 2);
         if (fread(pixels, 1, SPRITE_SIZE * SPRITE_SIZE / 2, file) !=
@@ -442,7 +499,7 @@ int load_file(const char *path) {
             goto cleanup;
         }
         Sprite sprite = {.name = name, .pixels = pixels};
-        da_append(&GLOB_SPRITES, sprite);
+        da_append(&SPRITES, sprite);
     }
 
     memcpy(&NEW_COLORS, &COLORS, NUM_COLORS * sizeof(Color));
@@ -461,12 +518,12 @@ cleanup:
 }
 
 void unload_sprites() {
-    da_foreach(Sprite, s, &GLOB_SPRITES) {
-        free(s->pixels);
+    da_foreach(Sprite, s, &SPRITES) {
+        free(s->name);
         free(s->pixels);
     }
-    da_free(GLOB_SPRITES);
-    GLOB_SPRITES = (SpriteList){0};
+    da_free(SPRITES);
+    SPRITES = (SpriteList){0};
 }
 
 int write_file(const char *path) {
@@ -477,12 +534,16 @@ int write_file(const char *path) {
         result = -1;
         goto cleanup;
     }
-    if (fprintf(file, "sprt") != 4) {
+    char magic[] = "sprt";
+    if (!NAMED) {
+        magic[3] = 'u';
+    }
+    if (fprintf(file, "%s", magic) != 4) {
         TraceLog(LOG_ERROR, "Error writing file: %s");
         result = -1;
         goto cleanup;
     }
-    uint32_t count = GLOB_SPRITES.count;
+    uint32_t count = SPRITES.count;
     if (fwrite(&count, sizeof(uint32_t), 1, file) != 1) {
         TraceLog(LOG_ERROR, "Error writing file: %s");
         result = -1;
@@ -494,23 +555,25 @@ int write_file(const char *path) {
         result = -1;
         goto cleanup;
     }
-    for (int i = 0; i < GLOB_SPRITES.count; i++) {
-        Sprite sprite = GLOB_SPRITES.items[i];
-        size_t name_len = strlen(sprite.name);
-        size_t padding_len = MAX_NAME_LEN - name_len;
-        size_t written_content = fwrite(sprite.name, 1, name_len, file);
-        if (written_content != name_len) {
-            TraceLog(LOG_ERROR, "Error writing file: %s");
-            result = -1;
-            goto cleanup;
-        }
-        if (padding_len > 0) {
-            char zero_byte = 0;
-            for (size_t i = 0; i < padding_len; i++) {
-                if (fwrite(&zero_byte, 1, 1, file) != 1) {
-                    TraceLog(LOG_ERROR, "Error writing file: %s");
-                    result = -1;
-                    goto cleanup;
+    for (int i = 0; i < SPRITES.count; i++) {
+        Sprite sprite = SPRITES.items[i];
+        if (NAMED) {
+            size_t name_len = strlen(sprite.name);
+            size_t padding_len = MAX_NAME_LEN - name_len;
+            size_t written_content = fwrite(sprite.name, 1, name_len, file);
+            if (written_content != name_len) {
+                TraceLog(LOG_ERROR, "Error writing file: %s");
+                result = -1;
+                goto cleanup;
+            }
+            if (padding_len > 0) {
+                char zero_byte = 0;
+                for (size_t i = 0; i < padding_len; i++) {
+                    if (fwrite(&zero_byte, 1, 1, file) != 1) {
+                        TraceLog(LOG_ERROR, "Error writing file: %s");
+                        result = -1;
+                        goto cleanup;
+                    }
                 }
             }
         }
@@ -609,7 +672,7 @@ void color_selector(Rectangle rect, int *selected, Color *colors) {
             *selected = i;
         }
         if (*selected == i) {
-            DrawRectangleLinesEx(colorpad, MARK_LINE_THICK, BLACK);
+            draw_dashed_outline(colorpad, MARK_LINE_THICK, 5);
         }
     }
 }
@@ -647,20 +710,25 @@ void edit_colors() {
 }
 
 void edit_sprite(int idx) {
-    memcpy(&EDIT_BUF, GLOB_SPRITES.items[idx].pixels,
-           SPRITE_SIZE * SPRITE_SIZE / 2);
+    memcpy(&EDIT_BUF, SPRITES.items[idx].pixels, SPRITE_SIZE * SPRITE_SIZE / 2);
     bool was_changed = false;
-    char *name = GLOB_SPRITES.items[idx].name;
+    char *name = SPRITES.items[idx].name;
     int color = -1;
 start:
     bool should_exit = false;
     while (!should_exit) {
+        SetMouseCursor(0);
         BeginDrawing();
         ClearBackground(BACKGROUND);
         Rectangle main = setup_screen(TextFormat("Edit Sprite: %s", name));
         RectTuple main_split = vsplit(main, 3, 2);
 
         Rectangle sprite_rect = fit_square_factor(main_split.r1, 16);
+        if (CheckCollisionPointRec(GetMousePosition(), sprite_rect)) {
+            SetMouseCursor(MOUSE_CURSOR_CROSSHAIR);
+        } else {
+            SetMouseCursor(0);
+        }
         int pixel_scale = sprite_rect.width / 16;
         draw_sprite((unsigned char *)&EDIT_BUF, pixel_scale, sprite_rect.x,
                     sprite_rect.y);
@@ -693,7 +761,7 @@ start:
         RectTuple buttons = vsplit(edit_split.r2, 1, 1);
 
         if (button("save", buttons.r1, BUTTON_COLOR)) {
-            memcpy(GLOB_SPRITES.items[idx].pixels, &EDIT_BUF,
+            memcpy(SPRITES.items[idx].pixels, &EDIT_BUF,
                    SPRITE_SIZE * SPRITE_SIZE / 2);
             was_changed = false;
         }
@@ -713,7 +781,7 @@ start:
         case -1:
             goto start;
         case 1:
-            memcpy(GLOB_SPRITES.items[idx].pixels, &EDIT_BUF,
+            memcpy(SPRITES.items[idx].pixels, &EDIT_BUF,
                    SPRITE_SIZE * SPRITE_SIZE / 2);
 
         case 0:
@@ -724,24 +792,23 @@ start:
 
 void edit_new() {
     unsigned char *ptr = malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
-    for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE / 2; i++) {
-        ptr[i] = 0;
-    }
+    memset(ptr, 0, sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
 
     if (ptr == NULL) {
         TraceLog(LOG_FATAL, "could not allocate new sprite");
-        // TODO:
+        abort();
     }
     char *name = string_popup("Enter sprite name:", "", MAX_NAME_LEN);
     if (name == NULL) {
-        return;
+        TraceLog(LOG_FATAL, "could not allocate new sprite");
+        abort();
     }
     Sprite entry = {
         .name = name,
         .pixels = ptr,
     };
-    da_append(&GLOB_SPRITES, entry);
-    edit_sprite(GLOB_SPRITES.count - 1);
+    da_append(&SPRITES, entry);
+    edit_sprite(SPRITES.count - 1);
 }
 
 bool sprite(Rectangle rect, int sprite) {
@@ -752,10 +819,10 @@ bool sprite(Rectangle rect, int sprite) {
         .height = rect.width - LITTLE_MARGIN,
     };
     sprite_region = fit_square_factor(sprite_region, 16);
-    draw_sprite(GLOB_SPRITES.items[sprite].pixels, sprite_region.width / 16,
+    draw_sprite(SPRITES.items[sprite].pixels, sprite_region.width / 16,
                 sprite_region.x, sprite_region.y);
 
-    DrawText(GLOB_SPRITES.items[sprite].name, rect.x + LITTLE_MARGIN * 3 / 2,
+    DrawText(SPRITES.items[sprite].name, rect.x + LITTLE_MARGIN * 3 / 2,
              rect.y + rect.width - LITTLE_MARGIN / 2, SMALL_FONT, TEXT_COLOR);
     return clickable_region(rect);
 }
@@ -768,7 +835,7 @@ int sprite_selector(Rectangle rect, int *page, int *num_pages) {
     int row_count = floor(rect.height / height);
     height = rect.height / row_count;
 
-    *num_pages = ceil((float)GLOB_SPRITES.count / (row_count * row_len));
+    *num_pages = ceil((float)SPRITES.count / (row_count * row_len));
 
     if (*page >= *num_pages) {
         *page = 0;
@@ -779,8 +846,8 @@ int sprite_selector(Rectangle rect, int *page, int *num_pages) {
 
     int offset = *page * row_len * row_count;
 
-    for (int i = offset;
-         i < GLOB_SPRITES.count && i < offset + row_count * row_len; i++) {
+    for (int i = offset; i < SPRITES.count && i < offset + row_count * row_len;
+         i++) {
         int x = (i - offset) % row_len;
         int y = (i - offset) / row_len;
 
@@ -843,8 +910,8 @@ int main(int argc, char *argv[]) {
 
         int result = button_list(&main_split.r1, buttons, 5);
 
-        DrawText(TextFormat("%d Sprites\nPage %d/%d", GLOB_SPRITES.count,
-                            page + 1, num_pages),
+        DrawText(TextFormat("%d Sprites\nPage %d/%d", SPRITES.count, page + 1,
+                            num_pages),
                  main_split.r1.x,
                  main_split.r1.y + main_split.r1.height - 2 * MEDIUM_FONT,
                  MEDIUM_FONT, TEXT_COLOR);
