@@ -1,7 +1,7 @@
 #include <math.h>
-#include <stdio.h>
 #include <stdlib.h>
 #define NOB_IMPLEMENTATION
+#define NOB_STRIP_PREFIX
 #include "nob.h"
 #include <raylib.h>
 
@@ -28,8 +28,8 @@
 const int WIDTH = 1200;
 const int HEIGHT = 900;
 
-const int POPUP_WIDTH = 300;
-const int POPUP_HEIGHT = 200;
+const int POPUP_WIDTH = 400;
+const int POPUP_HEIGHT = 150;
 
 const Color BACKGROUND = COLOR(0x222222FF);
 const Color POPUP_BACKGROUND = COLOR(0x333333FF);
@@ -52,13 +52,7 @@ const Color BUTTON_COLOR = GRAY;
 
 const int MARK_LINE_THICK = 5;
 
-const int MAX_PIXE_SCALE = 15;
-
-const int MAX_NAME_LEN = 200;
-enum { SPRITE_SIZE = 16 };
-
-// half a byte
-enum { NUM_COLORS = 16 };
+const int MAX_PIXEL_SCALE = 15;
 
 typedef struct {
     Rectangle r1;
@@ -284,6 +278,87 @@ float slider_region(Rectangle rect, float t) {
     return -1;
 }
 
+Rectangle setup_popup(const char *text) {
+    Rectangle full = get_popup_rect();
+    DrawRectangleRec(full, POPUP_BACKGROUND);
+    Rectangle inner = shrink(full, MARGINS);
+    DrawText(text, inner.x, inner.y, SMALL_FONT, TEXT_COLOR);
+    return inner;
+}
+
+int button_list_popup(const char *text, int count, char *buttons[],
+                      int default_val) {
+    bool done = false;
+    int result = -1;
+    while (!done) {
+        BeginDrawing();
+        Rectangle rect = setup_popup(text);
+        RectTuple split = chop_bottom(rect, SMALL_FONT);
+        for (int i = 0; i < count; i++) {
+            Rectangle b_view = hsubdivide(split.r2, count, i);
+            if (button(buttons[i], b_view, BUTTON_COLOR)) {
+                result = i;
+                done = true;
+            }
+        }
+        EndDrawing();
+        if (default_val >= 0 && IsKeyPressed(KEY_ENTER)) {
+            result = default_val;
+            done = true;
+        }
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            done = true;
+        }
+    }
+    return result;
+}
+
+char *string_popup(const char *text, const char *initial_text, int max_len) {
+    bool done = false;
+    char *input = malloc(max_len);
+    strcpy(input, initial_text);
+    int letter_count = strlen(input);
+    while (!done) {
+        BeginDrawing();
+        Rectangle rect = setup_popup(text);
+        RectTuple split = chop_bottom(rect, LITTLE_MARGIN * 2 + SMALL_FONT);
+        DrawRectangleRec(split.r2, WHITE);
+        Rectangle text_field = shrink(split.r2, LITTLE_MARGIN);
+        DrawText(input, text_field.x, text_field.y, SMALL_FONT, BLACK);
+
+        EndDrawing();
+        int key = GetCharPressed();
+
+        while (key > 0) {
+            // TODO: Unicode input
+            if ((key >= 32) && (key <= 125) && (letter_count < max_len - 1)) {
+                input[letter_count] = (char)key;
+                letter_count++;
+                input[letter_count] = '\0';
+            }
+            key = GetCharPressed();
+        }
+
+        if (IsKeyPressed(KEY_BACKSPACE) && letter_count > 0) {
+            letter_count--;
+            input[letter_count] = '\0';
+        }
+        if (IsKeyPressed(KEY_ENTER)) {
+            if (letter_count == 0) {
+                free(input);
+                input = NULL;
+            }
+            done = true;
+        }
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            free(input);
+            input = NULL;
+            done = true;
+        }
+    }
+    return input;
+}
+
 typedef struct {
     char *name;
     unsigned char *sprite;
@@ -295,121 +370,163 @@ typedef struct {
     int capacity;
 } SpriteList;
 
+const int MAX_NAME_LEN = 64;
+enum { SPRITE_SIZE = 16 };
+
+// half a byte
+enum { NUM_COLORS = 16 };
+
 Color COLORS[NUM_COLORS] = {0};
+Color NEW_COLORS[NUM_COLORS] = {0};
+Color *DISPLAYCOLORS = &COLORS[0];
 
 SpriteList GLOB_SPRITES = {0};
 
-const char *COLOR_PATH = "res/color.bin";
+unsigned char EDIT_BUF[SPRITE_SIZE * SPRITE_SIZE / 2] = {0};
 
-int load_colors() {
-    FILE *file = fopen(COLOR_PATH, "rb");
-    if (file == NULL) {
-        TraceLog(LOG_FATAL, "No color file found");
-        for (int i = 0; i < NUM_COLORS; i++) {
-            COLORS[i] = COLOR(0xFFFFFFFF);
+int load_file(const char *path) {
+    FILE *file = fopen(path, "r");
+    int result = 0;
+    if (!file) {
+        result = -1;
+        TraceLog(LOG_ERROR, "Error opening file: %s", path);
+        goto cleanup;
+    }
+    char magic[5] = {0};
+    if (fread(&magic, 1, 4, file) != 4) {
+        result = -1;
+        TraceLog(LOG_ERROR, "Error reading: %s", path);
+        goto cleanup;
+    }
+    if (strcmp(magic, "sprt") != 0) {
+        result = -1;
+        TraceLog(LOG_ERROR, "%s is not a sprite file", path);
+        goto cleanup;
+    }
+    uint32_t r_count = 0;
+    if (fread(&r_count, sizeof(uint32_t), 1, file) != 1) {
+        result = -1;
+        TraceLog(LOG_ERROR, "Error reading: %s", path);
+        goto cleanup;
+    }
+    int count = r_count;
+    if (fread(&COLORS, sizeof(Color), NUM_COLORS, file) != NUM_COLORS) {
+        result = -1;
+        TraceLog(LOG_ERROR, "Error reading: %s", path);
+        goto cleanup;
+    }
+    da_reserve(&GLOB_SPRITES, count);
+    for (int i = 0; i < count; i++) {
+        char *name = malloc(MAX_NAME_LEN);
+        if (fread(name, 1, MAX_NAME_LEN, file) != MAX_NAME_LEN) {
+            free(name);
+            result = -1;
+            TraceLog(LOG_ERROR, "Error reading: %s", path);
+            goto cleanup;
         }
-        return 0;
+        if (realloc(name, strlen(name) + 1) == NULL) {
+            free(name);
+            result = -1;
+            TraceLog(LOG_ERROR,
+                     "Error reading: %s\ncould not shrink string buffer", path);
+            goto cleanup;
+        }
+
+        unsigned char *pixels = malloc(SPRITE_SIZE * SPRITE_SIZE / 2);
+        if (fread(pixels, 1, SPRITE_SIZE * SPRITE_SIZE / 2, file) !=
+            SPRITE_SIZE * SPRITE_SIZE / 2) {
+            free(name);
+            free(pixels);
+            result = -1;
+            TraceLog(LOG_ERROR, "Error reading: %s", path);
+            goto cleanup;
+        }
+        Sprite sprite = {.name = name, .sprite = pixels};
+        da_append(&GLOB_SPRITES, sprite);
     }
 
-    int objs_read = fread((void *)&COLORS, sizeof(Color), NUM_COLORS, file);
-    if (objs_read != NUM_COLORS) {
-        TraceLog(LOG_FATAL, "color file had incorrect len");
-        fclose(file);
-        return 1;
-    };
-    fclose(file);
-    return 0;
-}
+    memcpy(&NEW_COLORS, &COLORS, NUM_COLORS * sizeof(Color));
 
-const char *SPRITES_PATH = "res/sprites/";
-
-int read_sprite(unsigned char *sprite, FILE *file) {
-    int objs_read = fread((void *)sprite, sizeof(char),
-                          SPRITE_SIZE * SPRITE_SIZE / 2, file);
-    if (objs_read != SPRITE_SIZE * SPRITE_SIZE / 2) {
-        return 1;
-    }
-    return 0;
-}
-
-int load_sprites() {
-    Sprite sprite = (Sprite){0};
-
-    DIR *dir;
-    struct dirent *dir_entry;
-
-    dir = opendir(SPRITES_PATH);
-    if (dir != NULL) {
-        while ((dir_entry = readdir(dir))) {
-            sprite = (Sprite){0};
-            if (dir_entry->d_namlen > MAX_NAME_LEN) {
-                TraceLog(LOG_TRACE, "Path was to long for: %s\n",
-                         dir_entry->d_name);
-                continue;
+cleanup:
+    if (file) {
+        if (fclose(file) != 0) {
+            TraceLog(LOG_ERROR, "Error closing file: %s", path);
+            if (result == 0) {
+                result = -1;
             }
-            int dot_idx = -1;
-            for (int i = 0; i < MAX_NAME_LEN && i < dir_entry->d_namlen; i++) {
-                char c = dir_entry->d_name[i];
-                if (c == '.') {
-                    dot_idx = i;
-                    break;
+        }
+    }
+
+    return result;
+}
+
+int write_file(const char *path) {
+    FILE *file = fopen(path, "w");
+    int result = 0;
+    if (!file) {
+        TraceLog(LOG_ERROR, "Error creating file %s", path);
+        result = -1;
+        goto cleanup;
+    }
+    if (fprintf(file, "sprt") != 4) {
+        TraceLog(LOG_ERROR, "Error writing file: %s");
+        result = -1;
+        goto cleanup;
+    }
+    uint32_t count = GLOB_SPRITES.count;
+    if (fwrite(&count, sizeof(uint32_t), 1, file) != 1) {
+        TraceLog(LOG_ERROR, "Error writing file: %s");
+        result = -1;
+        goto cleanup;
+    }
+
+    if (fwrite(&COLORS, sizeof(Color), NUM_COLORS, file) != NUM_COLORS) {
+        TraceLog(LOG_ERROR, "Error writing file: %s");
+        result = -1;
+        goto cleanup;
+    }
+    for (int i = 0; i < GLOB_SPRITES.count; i++) {
+        Sprite sprite = GLOB_SPRITES.items[i];
+        size_t name_len = strlen(sprite.name);
+        size_t padding_len = MAX_NAME_LEN - name_len;
+        size_t written_content = fwrite(sprite.name, 1, name_len, file);
+        if (written_content != name_len) {
+            TraceLog(LOG_ERROR, "Error writing file: %s");
+            result = -1;
+            goto cleanup;
+        }
+        if (padding_len > 0) {
+            char zero_byte = 0;
+            for (size_t i = 0; i < padding_len; i++) {
+                if (fwrite(&zero_byte, 1, 1, file) != 1) {
+                    TraceLog(LOG_ERROR, "Error writing file: %s");
+                    result = -1;
+                    goto cleanup;
                 }
             }
-            char *name = malloc(dot_idx);
-            strlcpy(name, dir_entry->d_name, dot_idx);
-            sprite.name = name;
-            if (dot_idx == -1) {
-                continue;
-            }
-
-            if (strcmp(&dir_entry->d_name[dot_idx], ".bin") != 0) {
-                continue;
-            }
-
-            TraceLog(LOG_INFO, "loading: %s", dir_entry->d_name);
-
-            char full_path[512];
-            int len = snprintf(full_path, sizeof(full_path), "%s/%s",
-                               SPRITES_PATH, dir_entry->d_name);
-
-            if (len < 0) {
-                TraceLog(LOG_WARNING, "Path construction failed for: %s",
-                         dir_entry->d_name);
-                continue;
-            }
-
-            unsigned char *ptr =
-                malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
-            if (ptr == NULL) {
-                TraceLog(LOG_FATAL, "cound not allocate sprite");
-                return 1;
-            }
-            char *path = full_path;
-            FILE *file = fopen(path, "rb");
-            if (file == NULL) {
-                free((void *)ptr);
-                continue;
-            }
-            if (read_sprite(ptr, file) != 0) {
-                free((void *)ptr);
-                continue;
-            };
-            sprite.sprite = ptr;
-            nob_da_append(&GLOB_SPRITES, sprite);
         }
-
-        closedir(dir);
-    } else {
-        TraceLog(LOG_FATAL, "Couldn't open the directory %s", SPRITES_PATH);
-        return 1;
+        size_t bytes_sent =
+            fwrite(sprite.sprite, 1, SPRITE_SIZE * SPRITE_SIZE / 2, file);
+        if (bytes_sent != SPRITE_SIZE * SPRITE_SIZE / 2) {
+            TraceLog(LOG_ERROR, "Error writing file: %s");
+            result = -1;
+            goto cleanup;
+        }
     }
 
-    TraceLog(LOG_INFO, "Loaded %d sprites", GLOB_SPRITES.count);
+cleanup:
+    if (file) {
+        if (fclose(file) != 0) {
+            TraceLog(LOG_ERROR, "Error closing file: %s", path);
+            if (result == 0)
+                result = -1;
+        }
+    }
 
-    return 0;
+    return result;
 }
 
-void sprite_draw(unsigned char *sprite, int pixel_width, int left, int top) {
+void draw_sprite(unsigned char *sprite, int pixel_width, int left, int top) {
     if (sprite == NULL) {
         return;
     }
@@ -424,20 +541,8 @@ void sprite_draw(unsigned char *sprite, int pixel_width, int left, int top) {
         int x = i % 16;
         int y = i / 16;
         DrawRectangle(left + x * pixel_width, top + y * pixel_width,
-                      pixel_width, pixel_width, COLORS[color_idx]);
+                      pixel_width, pixel_width, DISPLAYCOLORS[color_idx]);
     }
-}
-
-int write_colors() {
-    FILE *file = fopen(COLOR_PATH, "wb");
-    if (file == NULL) {
-        puts("could not write colors");
-        return 1;
-    }
-    fwrite(&COLORS, sizeof(Color), NUM_COLORS, file);
-    fflush(file);
-    fclose(file);
-    return 0;
 }
 
 void rgbaslider(Rectangle rect, unsigned char *component, char *name) {
@@ -461,7 +566,7 @@ void color_sliders(Color *color, Rectangle rect) {
     rgbaslider(vsubdivide(split.r2, 4, 3), &color->a, "A");
 }
 
-void color_selector(Rectangle rect, int *selected) {
+void color_selector(Rectangle rect, int *selected, Color *colors) {
     rect = fit_square_factor(rect, 8);
     if (IsKeyPressed(KEY_ESCAPE)) {
         *selected = -1;
@@ -475,9 +580,9 @@ void color_selector(Rectangle rect, int *selected) {
             .width = rect.width / 4,
             .height = rect.height / 4,
         };
-        DrawRectangleRec(colorpad, COLORS[i]);
+        DrawRectangleRec(colorpad, colors[i]);
 
-        Color opaque = COLORS[i];
+        Color opaque = colors[i];
         opaque.a = 0xFF;
         Rectangle opaque_r = (Rectangle){
             rect.x + x * rect.width / 4,
@@ -512,12 +617,12 @@ void edit_colors() {
         Rectangle main_region = setup_screen("Editing Color Palette");
         RectTuple main_split = vsplit(main_region, 3, 2);
 
-        color_selector(main_split.r1, &selected);
+        color_selector(main_split.r1, &selected, (Color *)&NEW_COLORS);
 
         RectTuple edit_split = chop_bottom(main_split.r2, BUTTON_HEIGHT);
 
         if (selected >= 0) {
-            color_sliders(&COLORS[selected], edit_split.r1);
+            color_sliders(&NEW_COLORS[selected], edit_split.r1);
         }
 
         RectTuple button_split = vsplit(edit_split.r2, 1, 1);
@@ -525,32 +630,31 @@ void edit_colors() {
         should_exit = button("exit", button_split.r1, BUTTON_COLOR);
 
         if (button("save", button_split.r2, BUTTON_COLOR)) {
-            write_colors();
+            memcpy(&COLORS, &NEW_COLORS, sizeof(Color) * NUM_COLORS);
         }
         EndDrawing();
     }
-
-    // TODO: ask if unwritten changes should be saved
-
-    // load colors to make sure they are what is uptodate
-    load_colors();
     return;
 }
 
 void edit_sprite(int idx) {
-    bool should_exit = false;
-    Sprite *entry = &GLOB_SPRITES.items[idx];
+    memcpy(&EDIT_BUF, GLOB_SPRITES.items[idx].sprite,
+           SPRITE_SIZE * SPRITE_SIZE / 2);
+    bool was_changed = false;
+    char *name = GLOB_SPRITES.items[idx].name;
     int color = -1;
+start:
+    bool should_exit = false;
     while (!should_exit) {
         BeginDrawing();
         ClearBackground(BACKGROUND);
-        Rectangle main =
-            setup_screen(TextFormat("Edit Sprite: %s", entry->name));
+        Rectangle main = setup_screen(TextFormat("Edit Sprite: %s", name));
         RectTuple main_split = vsplit(main, 3, 2);
 
         Rectangle sprite_rect = fit_square_factor(main_split.r1, 16);
         int pixel_scale = sprite_rect.width / 16;
-        sprite_draw(entry->sprite, pixel_scale, sprite_rect.x, sprite_rect.y);
+        draw_sprite((unsigned char *)&EDIT_BUF, pixel_scale, sprite_rect.x,
+                    sprite_rect.y);
         for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE; i++) {
             int x = i % SPRITE_SIZE;
             int y = i / SPRITE_SIZE;
@@ -560,9 +664,9 @@ void edit_sprite(int idx) {
                 .width = pixel_scale,
                 .height = pixel_scale,
             };
-            if (color != -1 && pixel(region, COLORS[color])) {
-                unsigned char double_pixel =
-                    ((unsigned char *)entry->sprite)[i / 2];
+            if (color != -1 && pixel(region, DISPLAYCOLORS[color])) {
+                was_changed = true;
+                unsigned char double_pixel = EDIT_BUF[i / 2];
                 if (i % 2 == 0) {
                     double_pixel &= 0xF0;
                     double_pixel += (unsigned char)color;
@@ -570,23 +674,65 @@ void edit_sprite(int idx) {
                     double_pixel &= 0x0F;
                     double_pixel += (unsigned char)color << 4;
                 }
-                ((unsigned char *)entry->sprite)[i / 2] = double_pixel;
+                EDIT_BUF[i / 2] = double_pixel;
             }
         }
 
         RectTuple edit_split = chop_bottom(main_split.r2, BUTTON_HEIGHT);
+        color_selector(edit_split.r1, &color, DISPLAYCOLORS);
 
-        color_selector(edit_split.r1, &color);
+        RectTuple buttons = vsplit(edit_split.r2, 1, 1);
 
-        RectTuple button_split = vsplit(edit_split.r2, 1, 1);
-        should_exit = button("exit", button_split.r1, BUTTON_COLOR);
-
-        if (button("save", button_split.r2, BUTTON_COLOR)) {
-            // TODO:
+        if (button("save", buttons.r1, BUTTON_COLOR)) {
+            memcpy(GLOB_SPRITES.items[idx].sprite, &EDIT_BUF,
+                   SPRITE_SIZE * SPRITE_SIZE / 2);
+            was_changed = false;
+        }
+        if (button("exit", buttons.r2, BUTTON_COLOR)) {
+            should_exit = true;
         }
         EndDrawing();
     }
+
+    if (was_changed) {
+        char *opts[] = {
+            "Discard",
+            "Keep",
+        };
+
+        switch (button_list_popup("Discard Changes?", 2, opts, 1)) {
+        case -1:
+            goto start;
+        case 1:
+            memcpy(GLOB_SPRITES.items[idx].sprite, &EDIT_BUF,
+                   SPRITE_SIZE * SPRITE_SIZE / 2);
+
+        case 0:
+        }
+    }
     return;
+}
+
+void edit_new() {
+    unsigned char *ptr = malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
+    for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE / 2; i++) {
+        ptr[i] = 0;
+    }
+
+    if (ptr == NULL) {
+        TraceLog(LOG_FATAL, "could not allocate new sprite");
+        // TODO:
+    }
+    char *name = string_popup("Enter sprite name:", "", MAX_NAME_LEN);
+    if (name == NULL) {
+        return;
+    }
+    Sprite entry = {
+        .name = name,
+        .sprite = ptr,
+    };
+    da_append(&GLOB_SPRITES, entry);
+    edit_sprite(GLOB_SPRITES.count - 1);
 }
 
 bool sprite(Rectangle rect, int sprite) {
@@ -597,7 +743,7 @@ bool sprite(Rectangle rect, int sprite) {
         .height = rect.width - LITTLE_MARGIN,
     };
     sprite_region = fit_square_factor(sprite_region, 16);
-    sprite_draw(GLOB_SPRITES.items[sprite].sprite, sprite_region.width / 16,
+    draw_sprite(GLOB_SPRITES.items[sprite].sprite, sprite_region.width / 16,
                 sprite_region.x, sprite_region.y);
 
     DrawText(GLOB_SPRITES.items[sprite].name, rect.x + LITTLE_MARGIN * 3 / 2,
@@ -607,7 +753,7 @@ bool sprite(Rectangle rect, int sprite) {
 
 int sprite_selector(Rectangle rect, int *page, int *num_pages) {
     int sprite_to_edit = -1;
-    int row_len = ceil(rect.width / (16 * MAX_PIXE_SCALE + LITTLE_MARGIN));
+    int row_len = ceil(rect.width / (16 * MAX_PIXEL_SCALE + LITTLE_MARGIN));
     float width = rect.width / row_len;
     float height = width + LITTLE_MARGIN + SMALL_FONT;
     int row_count = floor(rect.height / height);
@@ -615,14 +761,17 @@ int sprite_selector(Rectangle rect, int *page, int *num_pages) {
 
     *num_pages = ceil((float)GLOB_SPRITES.count / (row_count * row_len));
 
-    if (page > num_pages) {
+    if (*page >= *num_pages) {
         *page = 0;
+    }
+    if (*page < 0) {
+        *page = *num_pages - 1;
     }
 
     int offset = *page * row_len * row_count;
 
-    for (int i = offset; i < GLOB_SPRITES.count && i < row_count * row_len;
-         i++) {
+    for (int i = offset;
+         i < GLOB_SPRITES.count && i < offset + row_count * row_len; i++) {
         int x = (i - offset) % row_len;
         int y = (i - offset) / row_len;
 
@@ -639,78 +788,25 @@ int sprite_selector(Rectangle rect, int *page, int *num_pages) {
     return sprite_to_edit;
 }
 
-char *string_popup(const char *text, const char *initial_text, int max_len) {
-    bool done = false;
-    char *input = malloc(max_len);
-    strcpy(input, initial_text);
-    int letter_count = strlen(input);
-    while (!done) {
-        BeginDrawing();
-        Rectangle full = get_popup_rect();
-        DrawRectangleRec(full, POPUP_BACKGROUND);
-        Rectangle inner = shrink(full, MARGINS);
-        DrawText(text, inner.x, inner.y, SMALL_FONT, TEXT_COLOR);
-
-        RectTuple split = chop_bottom(inner, LITTLE_MARGIN * 2 + SMALL_FONT);
-        DrawRectangleRec(split.r2, WHITE);
-        Rectangle text_field = shrink(split.r2, LITTLE_MARGIN);
-        DrawText(input, text_field.x, text_field.y, SMALL_FONT, BLACK);
-
-        EndDrawing();
-        int key = GetCharPressed();
-
-        while (key > 0) {
-            if ((key >= 32) && (key <= 125) && (letter_count < max_len - 1)) {
-                input[letter_count] = (char)key;
-                letter_count++;
-                input[letter_count] = '\0';
-            }
-            key = GetCharPressed();
-        }
-
-        if (IsKeyPressed(KEY_BACKSPACE) && letter_count > 0) {
-            letter_count--;
-            input[letter_count] = '\0';
-        }
-        if (IsKeyPressed(KEY_ENTER)) {
-            done = true;
-        }
-        if (IsKeyPressed(KEY_ESCAPE)) {
-            free(input);
-            input = NULL;
-            done = true;
-        }
-    }
-    return input;
-}
-
-void edit_new() {
-    unsigned char *ptr = malloc(sizeof(char) * SPRITE_SIZE * SPRITE_SIZE / 2);
-    for (int i = 0; i < SPRITE_SIZE * SPRITE_SIZE / 2; i++) {
-        ptr[i] = 0;
-    }
-
-    if (ptr == NULL) {
-        TraceLog(LOG_FATAL, "could not allocate new sprite");
-        // TODO:
-    }
-    Sprite entry = {
-        .name = string_popup("Enter sprite name:", "", MAX_NAME_LEN),
-        .sprite = ptr,
-    };
-    nob_da_append(&GLOB_SPRITES, entry);
-    edit_sprite(GLOB_SPRITES.count - 1);
-}
-
-int main() {
+int main(int argc, char *argv[]) {
+    SetTraceLogLevel(LOG_WARNING);
     InitWindow(WIDTH, HEIGHT, "Spredit");
     SetWindowState(FLAG_WINDOW_RESIZABLE);
+    SetTargetFPS(100);
+    // just to disable close on esc
+    SetExitKey(KEY_F10);
 
-    if (load_colors() != 0) {
-        return 1;
-    }
+    char *file_name = 0;
 
-    if (load_sprites() != 0) {
+    switch (argc) {
+    case 1:
+        break;
+    case 2:
+        file_name = argv[1];
+        load_file(argv[1]);
+        break;
+    case 3:
+        TraceLog(LOG_ERROR, "invalid arguments");
         return 1;
     }
 
@@ -718,6 +814,13 @@ int main() {
     int page = 0;
     int num_pages = 0;
     while (!should_quit) {
+        should_quit = WindowShouldClose();
+        if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_DOWN)) {
+            page += 1;
+        }
+        if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_UP)) {
+            page -= 1;
+        }
         BeginDrawing();
         ClearBackground(BACKGROUND);
 
@@ -726,18 +829,22 @@ int main() {
         RectTuple main_split = vsplit(main_region, 2, 5);
 
         char *buttons[] = {
-            "Edit Palette",
-            "New Sprite",
-            "Quit",
+            "Edit Palette", "New Sprite", "Save Changes", "Save As", "Quit",
         };
 
-        int result = button_list(&main_split.r1, buttons, 3);
+        int result = button_list(&main_split.r1, buttons, 5);
 
         DrawText(TextFormat("%d Sprites\nPage %d/%d", GLOB_SPRITES.count,
                             page + 1, num_pages),
                  main_split.r1.x,
                  main_split.r1.y + main_split.r1.height - 2 * MEDIUM_FONT,
                  MEDIUM_FONT, TEXT_COLOR);
+
+        if (file_name) {
+            DrawText(TextFormat("File: %s", file_name), main_split.r1.x,
+                     main_split.r1.y + main_split.r1.height - 3 * MEDIUM_FONT,
+                     MEDIUM_FONT, TEXT_COLOR);
+        }
 
         int sprite_to_edit = sprite_selector(main_split.r2, &page, &num_pages);
 
@@ -750,7 +857,17 @@ int main() {
         case 1:
             edit_new();
             break;
+        case 3:
+            file_name = NULL;
         case 2:
+            if (file_name == NULL) {
+                file_name = string_popup("Enter file name", "", 64);
+            }
+            if (file_name != NULL && write_file(file_name) != 0) {
+                return 1;
+            }
+            break;
+        case 4:
             should_quit = true;
             break;
         }
