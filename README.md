@@ -13,7 +13,7 @@ Two binary formats are supported: **named sprites** (`sprt`) and **unnamed sprit
 ### Header (72 bytes)
 
 * **magic**: `char[4]` — `"sprt"` or `"spru"`
-* **sprite_count**: `uint32`
+* **sprite_count**: `uint32` (little endian)
 * **color_palette**: `uint32[16]` — 16 RGBA colors
 
 ---
