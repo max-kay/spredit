@@ -8,26 +8,35 @@ This project is my first nontrivial C project.
 
 ## File Format
 
-Named sprites:
-|Name              |Value     |Type       |Length    |
-|------------------|----------|-----------|----------|
-|Magic             |"sprt"    |char[4]    |4         |
-|Number of Sprites |n         |uint32     |4         |
-|Colorpalette      |rgba      |uint32[16] |16*4 = 64 |
-|Sprite 0          |name      |char (*)   |64        |
-|                  |bitmap    |char (*)   |128       |
-|...               |...       |...        |...       |
-|Sprite (n - 1)    |name      |char (*)   |64        |
-|                  |bitmap    |char (*)   |128       |
+Two binary formats are supported: **named sprites** (`sprt`) and **unnamed sprites** (`spru`). Both share a common header:
 
-Unnamed sprites:
-|Name              |Value     |Type       |Length    |
-|------------------|----------|-----------|----------|
-|Magic             |"spru"    |char[4]    |4         |
-|Number of Sprites |n         |uint32     |4         |
-|Colorpalette      |rgba      |uint32[16] |16*4 = 64 |
-|Sprite 0          |bitmap    |char (*)   |128       |
-|...               |...       |...        |...       |
-|Sprite (n - 1)    |bitmap    |char (*)   |128       |
+### Header (72 bytes)
 
-totlen = 72 + 192*n
+* **magic**: `char[4]` — `"sprt"` or `"spru"`
+* **sprite_count**: `uint32`
+* **color_palette**: `uint32[16]` — 16 RGBA colors
+
+---
+
+## Named Sprites (`sprt`)
+
+Each sprite entry contains a name and a bitmap.
+
+| Field  | Size  | Description          |
+| ------ | ----- | -------------------- |
+| name   | 64 B  | Sprite name (string) |
+| bitmap | 128 B | Bitmap data          |
+
+**Total size:** `72 + 192 * sprite_count` bytes
+
+---
+
+## Unnamed Sprites (`spru`)
+
+Each sprite entry contains only a bitmap.
+
+| Field  | Size  | Description |
+| ------ | ----- | ----------- |
+| bitmap | 128 B | Bitmap data |
+
+**Total size:** `72 + 128 * sprite_count` bytes
